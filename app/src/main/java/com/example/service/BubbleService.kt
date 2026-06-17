@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.runtime.Recomposer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -201,77 +203,101 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
     @SuppressLint("ClickableViewAccessibility")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") {
-            removeFloatingView()
-            stopSelf()
+            try {
+                removeFloatingView()
+                stopSelf()
+            } catch (e: Exception) {
+                Log.e("BubbleService", "Error basic stop: ${e.message}")
+            }
             return START_NOT_STICKY
         }
 
         if (floatingView != null) return START_STICKY
 
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        try {
+            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            },
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 120
-            y = 200
-        }
-
-        val frameLayout = FrameLayout(this).apply {
-            setViewTreeLifecycleOwner(this@BubbleService)
-            setViewTreeViewModelStoreOwner(this@BubbleService)
-            setViewTreeSavedStateRegistryOwner(this@BubbleService)
-        }
-
-        val composeView = ComposeView(this).apply {
-            setContent {
-                var isExpanded by remember { mutableStateOf(false) }
-                
-                if (isExpanded) {
-                    BubbleExpandedCard(
-                        onCollapse = { isExpanded = false },
-                        onDrag = { dx, dy ->
-                            params.x += dx.toInt()
-                            params.y += dy.toInt()
-                            try {
-                                windowManager.updateViewLayout(frameLayout, params)
-                            } catch (e: Exception) {}
-                        }
-                    )
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 } else {
-                    BubbleCollapsedDot(
-                        onExpand = { isExpanded = true },
-                        onDrag = { dx, dy ->
-                            params.x += dx.toInt()
-                            params.y += dy.toInt()
-                            try {
-                                windowManager.updateViewLayout(frameLayout, params)
-                            } catch (e: Exception) {}
-                        }
-                    )
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE
+                },
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 120
+                y = 200
+            }
+
+            val frameLayout = FrameLayout(this).apply {
+                setViewTreeLifecycleOwner(this@BubbleService)
+                setViewTreeViewModelStoreOwner(this@BubbleService)
+                setViewTreeSavedStateRegistryOwner(this@BubbleService)
+            }
+
+            val composeView = ComposeView(this).apply {
+                setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+                setContent {
+                    var isExpanded by remember { mutableStateOf(false) }
+                    
+                    if (isExpanded) {
+                        BubbleExpandedCard(
+                            onCollapse = { isExpanded = false },
+                            onDrag = { dx, dy ->
+                                params.x += dx.toInt()
+                                params.y += dy.toInt()
+                                try {
+                                    windowManager.updateViewLayout(frameLayout, params)
+                                } catch (e: Exception) {}
+                            }
+                        )
+                    } else {
+                        BubbleCollapsedDot(
+                            onExpand = { isExpanded = true },
+                            onDrag = { dx, dy ->
+                                params.x += dx.toInt()
+                                params.y += dy.toInt()
+                                try {
+                                    windowManager.updateViewLayout(frameLayout, params)
+                                } catch (e: Exception) {}
+                            }
+                        )
+                    }
                 }
             }
-        }
 
-        frameLayout.addView(composeView)
-        floatingView = frameLayout
+            val recomposer = Recomposer(Dispatchers.Main)
+            composeView.setParentCompositionContext(recomposer)
+            serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    recomposer.runRecomposeAndApplyChanges()
+                } catch (e: Exception) {
+                    Log.e("BubbleService", "Recomposer error: ${e.message}")
+                }
+            }
 
-        try {
+            frameLayout.addView(composeView)
+            floatingView = frameLayout
+
             windowManager.addView(frameLayout, params)
+            
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
         } catch (e: Exception) {
-            Log.e("BubbleService", "Error displaying bubble overlay: ${e.message}")
-            stopSelf()
+            Log.e("BubbleService", "Error displaying bubble overlay: ${e.message}", e)
+            try {
+                Toast.makeText(applicationContext, "فشل تشغيل الكرة العائمة: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+                removeFloatingView()
+                stopSelf()
+            } catch (ex: Exception) {
+                Log.e("BubbleService", "Error inside catch block: ${ex.message}")
+            }
         }
 
         return START_STICKY

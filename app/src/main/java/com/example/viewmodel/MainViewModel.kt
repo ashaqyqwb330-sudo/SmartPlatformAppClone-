@@ -277,6 +277,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun checkClipboard(onNotify: (String) -> Unit) {
+        val sharedPrefs = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val isAutoProcess = sharedPrefs.getBoolean("auto_process_clipboard", true)
+        if (!isAutoProcess) return
+
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        if (clipboard != null && clipboard.hasPrimaryClip()) {
+            val clipData = clipboard.primaryClip
+            if (clipData != null && clipData.itemCount > 0) {
+                val text = clipData.getItemAt(0).text?.toString() ?: ""
+                val pBuilder = prefixBuilder.value
+                val pExecutor = prefixExecutor.value
+                val pTreedoc = prefixTreedoc.value
+
+                if (text.isNotBlank() && (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:"))) {
+                    val lastProcessed = sharedPrefs.getString("last_foreground_processed_text", "") ?: ""
+                    if (text != lastProcessed) {
+                        sharedPrefs.edit().putString("last_foreground_processed_text", text).apply()
+                        sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
+                        onNotify("📋 تم اكتشاف توجيهات جديدة في الحافظة! جاري المعالجة التلقائية وحفظها...")
+                        runManualProcess(text) { result ->
+                            onNotify(result)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fun executeSingleCommand(cmd: String, onFinished: (String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             insertSystemLog("أمر مباشر", "تنفيذ توجيه أمر فوري من المنفذ: $cmd")

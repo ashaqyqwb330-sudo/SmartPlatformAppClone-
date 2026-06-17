@@ -112,31 +112,8 @@ class MainActivity : ComponentActivity() {
         viewModel.navigateToBaseDir() // refresh browser
 
         // Check clipboard for auto-processing on application focus
-        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
-        val isAutoProcess = sharedPrefs.getBoolean("auto_process_clipboard", true)
-        if (isAutoProcess) {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-            if (clipboard != null && clipboard.hasPrimaryClip()) {
-                val clipData = clipboard.primaryClip
-                if (clipData != null && clipData.itemCount > 0) {
-                    val text = clipData.getItemAt(0).text?.toString() ?: ""
-                    val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
-                    val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
-                    val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
-
-                    if (text.isNotBlank() && (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:"))) {
-                        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
-                        if (text != lastProcessed) {
-                            sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
-                            Toast.makeText(this, "📋 تم اكتشاف توجيهات جديدة في الحافظة! جاري المعالجة التلقائية وحفظها...", Toast.LENGTH_LONG).show()
-                            viewModel.runManualProcess(text) { resultMsg ->
-                                Toast.makeText(this, resultMsg, Toast.LENGTH_SHORT).show()
-                                viewModel.navigateToBaseDir() // Refresh file list
-                            }
-                        }
-                    }
-                }
-            }
+        viewModel.checkClipboard { resultMsg ->
+            Toast.makeText(this, resultMsg, Toast.LENGTH_LONG).show()
         }
     }
 }
