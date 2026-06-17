@@ -88,6 +88,19 @@ class ClipboardAccessibilityService : AccessibilityService() {
         // Setup Foreground Service to prevent OS termination
         try {
             createNotificationChannel()
+            
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                // Suspended on Android 10+ in favor of BuilderIME
+                startForeground(
+                    NOTIFICATION_ID, 
+                    buildNotification(
+                        "مساعد الحافظة: معلق على أندرويد 10+", 
+                        "الرجاء تمكين 'لوحة مفاتيح الأتمتة الذكية' للتشغيل الآمن للأجهزة الحديثة."
+                    )
+                )
+                return
+            }
+
             val paused = isPaused
             val title = if (paused) "مساعد الحافظة: متوقف مؤقتاً" else "مساعد الحافظة: يعمل بنشاط"
             val text = if (paused) "المراقبة متوقفة مؤقتاً." else "مساعد الحافظة يقوم بالفحص المباشر والفوري بالخلفية."
@@ -96,9 +109,11 @@ class ClipboardAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Error starting foreground in AccessibilityService: ${e.message}")
         }
 
-        getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
-            .registerOnSharedPreferenceChangeListener(prefsListener)
-        updatePollingState()
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+                .registerOnSharedPreferenceChangeListener(prefsListener)
+            updatePollingState()
+        }
     }
 
     private fun updatePollingState() {

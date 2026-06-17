@@ -60,6 +60,13 @@ class ClipboardMonitorService : Service() {
             return START_NOT_STICKY
         }
 
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+            val title = "مراقب الحافظة: معلق"
+            val text = "على أندرويد 10+ يرجى استخدام لوحة مفاتيح الأتمتة الذكية للخصوصية والأمان."
+            startForeground(NOTIFICATION_ID, buildNotification(title, text))
+            return START_STICKY
+        }
+
         if (action == ACTION_PAUSE) {
             isPaused = true
             logSystemEvent("إيقاف مؤقت", "تم تفعيل حالة الإيقاف المؤقت للمراقبة.")

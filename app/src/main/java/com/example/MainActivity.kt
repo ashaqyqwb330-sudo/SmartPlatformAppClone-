@@ -66,6 +66,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import android.os.PowerManager
 import android.os.Environment
+import android.view.inputmethod.InputMethodManager
 
 fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val service = "${context.packageName}/${ClipboardAccessibilityService::class.java.canonicalName}"
@@ -2437,6 +2438,8 @@ fun PermissionsDashboardDialog(
     var hasAllFiles by remember { mutableStateOf(false) }
     var hasBatteryIgnore by remember { mutableStateOf(false) }
     var hasOverlay by remember { mutableStateOf(false) }
+    var hasImeEnabled by remember { mutableStateOf(false) }
+    var isBubbleRunning by remember { mutableStateOf(false) }
     
     fun refreshStates() {
         hasNotify = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -2453,6 +2456,14 @@ fun PermissionsDashboardDialog(
         hasBatteryIgnore = pm.isIgnoringBatteryOptimizations(context.packageName)
         
         hasOverlay = Settings.canDrawOverlays(context)
+
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        hasImeEnabled = imm.enabledInputMethodList.any { it.packageName == context.packageName }
+
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        isBubbleRunning = activityManager?.getRunningServices(Integer.MAX_VALUE)?.any {
+            it.service.className == "com.example.service.BubbleService"
+        } ?: false
     }
     
     LaunchedEffect(Unit) {
@@ -2508,6 +2519,22 @@ fun PermissionsDashboardDialog(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // 0. Smart Keyboard (Android 10+)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        item {
+                            PermissionItemCard(
+                                title = "لوحة مفاتيح الأتمتة الذكية (Android 10+)",
+                                description = "الحل المعتمد والآمن لتجاوز قيود أندرويد الحديثة بالخلفية. تفاعلية بالكامل، وتعالج التوجيهات فور نسخها.",
+                                isGranted = hasImeEnabled,
+                                onGrant = {
+                                    Toast.makeText(context, "يرجى اختيار وتفعيل 'لوحة مفاتيح الأتمتة الذكية' في مدير لوحات المفاتيح.", Toast.LENGTH_LONG).show()
+                                    val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                                    context.startActivity(intent)
+                                }
+                            )
+                        }
+                    }
+
                     // 1. Accessibility Service
                     item {
                         PermissionItemCard(
@@ -2581,6 +2608,79 @@ fun PermissionsDashboardDialog(
                                 } catch (e: Exception) {}
                             }
                         )
+                    }
+                    
+                    if (hasOverlay) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = GlassWhite.copy(alpha = 0.08f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "الكرة العائمة الذكية",
+                                            color = Color.White,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = if (isBubbleRunning) "🟢 نشطة وظاهرة" else "🔴 غير مفعلة",
+                                            color = if (isBubbleRunning) BrightGold else Color.Gray,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    
+                                    Text(
+                                        text = "الكرة العائمة تتيح لك تشغيل لوحة التحكم السريعة وعرض الملفات فورياً فوق أي تطبيق آخر.",
+                                        color = TextSilver,
+                                        fontSize = 11.sp
+                                    )
+                                    
+                                    Button(
+                                        onClick = {
+                                            try {
+                                                val serviceIntent = Intent(context, com.example.service.BubbleService::class.java)
+                                                if (isBubbleRunning) {
+                                                    serviceIntent.action = "STOP"
+                                                    context.stopService(serviceIntent)
+                                                    Toast.makeText(context, "تم إيقاف خدمة الكرة العائمة.", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    context.startService(serviceIntent)
+                                                    Toast.makeText(context, "تم تشغيل الكرة العائمة بنجاح!", Toast.LENGTH_SHORT).show()
+                                                }
+                                                refreshStates()
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "فشل التحكم بالخدمة: ${e.message}", Toast.LENGTH_LONG).show()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isBubbleRunning) Color(0xFFDC2626) else MetallicGold,
+                                            contentColor = if (isBubbleRunning) Color.White else SlateBg
+                                        ),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isBubbleRunning) "إغلاق وتعطيل الكرة العائمة" else "تشغيل وتفعيل الكرة العائمة الآن",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                     
                     // 5. Notifications

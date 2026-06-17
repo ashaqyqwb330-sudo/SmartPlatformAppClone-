@@ -72,6 +72,26 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- خدمة الكرة العائمة الذكية -->
+        <service
+            android:name=".service.BubbleService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- لوحة مفاتيح الأتمتة الذكية -->
+        <service
+            android:name=".service.BuilderIME"
+            android:label="لوحة مفاتيح الأتمتة الذكية (المنصة الذكية)"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
         <!-- Receivers -->
         <receiver
             android:name=".service.BootReceiver"
