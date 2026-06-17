@@ -299,6 +299,10 @@ class BuilderIME : InputMethodService() {
 
             if (text.isBlank()) return
 
+            val textHash = text.trim().hashCode().toString()
+            val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+            if (textHash == lastProcessedHash) return
+
             val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
             val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
             val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
@@ -310,6 +314,7 @@ class BuilderIME : InputMethodService() {
                 processCopiedText(text)
             } else {
                 if (text.trim().length >= 8) {
+                    sharedPrefs.edit().putString("last_processed_text_hash", textHash).apply()
                     sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
                     imeScope.launch(Dispatchers.Main) {
                         try {
@@ -326,10 +331,17 @@ class BuilderIME : InputMethodService() {
 
     private fun processCopiedText(text: String) {
         val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val textHash = text.trim().hashCode().toString()
+        val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+        if (textHash == lastProcessedHash && text.isNotBlank()) {
+            return
+        }
+
         val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
         if (text == lastProcessed && text.isNotBlank()) {
             return
         }
+        sharedPrefs.edit().putString("last_processed_text_hash", textHash).apply()
         sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
 
         imeScope.launch {

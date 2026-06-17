@@ -292,8 +292,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val pTreedoc = prefixTreedoc.value
 
                 if (text.isNotBlank() && (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:"))) {
-                    val lastProcessed = sharedPrefs.getString("last_foreground_processed_text", "") ?: ""
-                    if (text != lastProcessed) {
+                    val textHash = text.trim().hashCode().toString()
+                    val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+                    if (textHash != lastProcessedHash) {
+                        sharedPrefs.edit().putString("last_processed_text_hash", textHash).apply()
                         sharedPrefs.edit().putString("last_foreground_processed_text", text).apply()
                         sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
                         onNotify("📋 تم اكتشاف توجيهات جديدة في الحافظة! جاري المعالجة التلقائية وحفظها...")

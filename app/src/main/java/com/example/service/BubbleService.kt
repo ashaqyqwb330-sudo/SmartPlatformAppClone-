@@ -7,7 +7,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -15,39 +17,20 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
-import androidx.compose.animation.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.runtime.Recomposer
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.lifecycle.*
-import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.lifecycle.setViewTreeViewModelStoreOwner
-import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
@@ -56,14 +39,19 @@ import com.example.db.AppDatabase
 import com.example.db.FileEntity
 import com.example.db.LogEntity
 import com.example.engine.BuilderEngine
-import kotlinx.coroutines.*
+import com.example.engine.ProcessResult
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * الفقاعة العائمة الذكية (Bubble Overlay Service) - مركز القيادة العائم لجميع الإصدارات
- *
- * يوفر وصولاً سريعاً، فحصاً يدوياً/تلقائياً مستمراً، ومؤشر حالة بصري ملون،
- * مع إمكانية التمدد للوحة تحكم مصغرة تمكن من التحكم بالخدمة وعرض إحصائيات مجلد العمل.
+ * الفقاعة العائمة الذكية (Bubble Overlay Service) - نسخة الـ View التقليدية بالكامل
+ * لضمان أقصى درجات الاستقرار والثبات وتجنب أي انهيارات.
  */
 class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
@@ -84,6 +72,12 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
     private val handler = Handler(Looper.getMainLooper())
     private var lastKnownClipText = ""
     private var isPollingActive = false
+
+    private lateinit var filesCountTxt: TextView
+    private lateinit var lastActionTxt: TextView
+    private lateinit var statusCircle: View
+    private lateinit var statusTxt: TextView
+    private lateinit var toggleStatusBtn: Button
 
     private val isPaused: Boolean
         get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
@@ -128,7 +122,7 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
                 }
             }
         } catch (e: Exception) {
-            // Silent block for constraints on modern Android systems when window is not focused
+            // Safe silent catch
         }
     }
 
@@ -136,6 +130,10 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
         val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
         val isAutoProcess = sharedPrefs.getBoolean("auto_process_clipboard", true)
         if (!isAutoProcess) return
+
+        val textHash = text.trim().hashCode().toString()
+        val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+        if (textHash == lastProcessedHash) return
 
         val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
         val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
@@ -148,8 +146,14 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
 
     private fun processClipboardContent(text: String) {
         val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val textHash = text.trim().hashCode().toString()
+        val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+        if (textHash == lastProcessedHash && text.isNotBlank()) return
+
         val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
         if (text == lastProcessed && text.isNotBlank()) return
+
+        sharedPrefs.edit().putString("last_processed_text_hash", textHash).apply()
         sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
 
         serviceScope.launch {
@@ -214,6 +218,51 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
 
         if (floatingView != null) return START_STICKY
 
+        setupFloatingView()
+
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
+        return START_STICKY
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
+    }
+
+    private fun createCircleDrawable(colorHex: String): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(colorHex))
+        }
+    }
+
+    private fun createRoundedDrawable(colorHex: String, radiusDp: Float, strokeColorHex: String? = null, strokeWidthDp: Int = 0): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(Color.parseColor(colorHex))
+            cornerRadius = dpToPx(radiusDp.toInt()).toFloat()
+            if (strokeColorHex != null && strokeWidthDp > 0) {
+                setStroke(dpToPx(strokeWidthDp), Color.parseColor(strokeColorHex))
+            }
+        }
+    }
+
+    private fun updateStatusUI() {
+        val paused = isPaused
+        if (paused) {
+            statusCircle.background = createCircleDrawable("#ef4444")
+            statusTxt.text = "متوقف"
+            toggleStatusBtn.text = "استئناف"
+        } else {
+            statusCircle.background = createCircleDrawable("#10b981")
+            statusTxt.text = "نشط"
+            toggleStatusBtn.text = "إيقاف"
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
+    private fun setupFloatingView() {
         try {
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
@@ -234,282 +283,330 @@ class BubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedState
                 y = 200
             }
 
-            val frameLayout = FrameLayout(this).apply {
-                setViewTreeLifecycleOwner(this@BubbleService)
-                setViewTreeViewModelStoreOwner(this@BubbleService)
-                setViewTreeSavedStateRegistryOwner(this@BubbleService)
+            // Root view container
+            val rootLayout = FrameLayout(this)
+
+            // 1. COLLAPSED DOT VIEW
+            val collapsedLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                background = createCircleDrawable("#1e293b").apply {
+                    setStroke(dpToPx(2), Color.parseColor("#ffd700"))
+                }
+            }
+            val logoTxt = TextView(this).apply {
+                text = "🤖"
+                setTextColor(Color.WHITE)
+                textSize = 24f
+                gravity = Gravity.CENTER
+            }
+            collapsedLayout.addView(logoTxt)
+
+            val collapsedDotParams = FrameLayout.LayoutParams(dpToPx(56), dpToPx(56)).apply {
+                gravity = Gravity.CENTER
+            }
+            rootLayout.addView(collapsedLayout, collapsedDotParams)
+
+            // 2. EXPANDED CARD VIEW
+            val expandedCardLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = createRoundedDrawable("#1e293b", 16f, "#ffd700", 2)
+                setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
+                visibility = View.GONE
             }
 
-            val composeView = ComposeView(this).apply {
-                setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-                setContent {
-                    var isExpanded by remember { mutableStateOf(false) }
-                    
-                    if (isExpanded) {
-                        BubbleExpandedCard(
-                            onCollapse = { isExpanded = false },
-                            onDrag = { dx, dy ->
-                                params.x += dx.toInt()
-                                params.y += dy.toInt()
-                                try {
-                                    windowManager.updateViewLayout(frameLayout, params)
-                                } catch (e: Exception) {}
-                            }
-                        )
-                    } else {
-                        BubbleCollapsedDot(
-                            onExpand = { isExpanded = true },
-                            onDrag = { dx, dy ->
-                                params.x += dx.toInt()
-                                params.y += dy.toInt()
-                                try {
-                                    windowManager.updateViewLayout(frameLayout, params)
-                                } catch (e: Exception) {}
-                            }
-                        )
+            // Header Row (Title and Close button)
+            val headerLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dpToPx(6))
+            }
+
+            val headerTitleLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val iconTxt = TextView(this).apply {
+                text = "⭐"
+                textSize = 14f
+                setPadding(0, 0, dpToPx(4), 0)
+            }
+            headerTitleLayout.addView(iconTxt)
+
+            val titleTxt = TextView(this).apply {
+                text = "منصة الأتمتة"
+                setTextColor(Color.parseColor("#ffd700"))
+                textSize = 13f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            headerTitleLayout.addView(titleTxt)
+            headerLayout.addView(headerTitleLayout)
+
+            val closeTxtBtn = TextView(this).apply {
+                text = "✕"
+                setTextColor(Color.parseColor("#cbd5e1"))
+                textSize = 16f
+                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+                setOnClickListener {
+                    expandedCardLayout.visibility = View.GONE
+                    collapsedLayout.visibility = View.VISIBLE
+                }
+            }
+            headerLayout.addView(closeTxtBtn)
+            expandedCardLayout.addView(headerLayout)
+
+            // Divider Line
+            val divider = View(this).apply {
+                setBackgroundColor(Color.parseColor("#334155"))
+                val dParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(1)).apply {
+                    setMargins(0, dpToPx(4), 0, dpToPx(8))
+                }
+                layoutParams = dParams
+            }
+            expandedCardLayout.addView(divider)
+
+            // Status Row
+            val statusRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dpToPx(6))
+            }
+            val statusLabel = TextView(this).apply {
+                text = "المراقبة الفورية:"
+                setTextColor(Color.parseColor("#94a3b8"))
+                textSize = 11f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            statusRow.addView(statusLabel)
+
+            val statusIndicatorContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            statusCircle = View(this).apply {
+                background = createCircleDrawable("#10b981")
+                val cParams = LinearLayout.LayoutParams(dpToPx(8), dpToPx(8)).apply {
+                    setMargins(0, 0, dpToPx(6), 0)
+                }
+                layoutParams = cParams
+            }
+            statusIndicatorContainer.addView(statusCircle)
+
+            statusTxt = TextView(this).apply {
+                text = "نشط"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            statusIndicatorContainer.addView(statusTxt)
+            statusRow.addView(statusIndicatorContainer)
+            expandedCardLayout.addView(statusRow)
+
+            // Stats Row (Base folder & files count)
+            val statsRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dpToPx(6))
+            }
+            val folderTxt = TextView(this).apply {
+                val currentBase = getBaseDir()
+                text = "المجلد: ${currentBase.name}"
+                setTextColor(Color.parseColor("#cbd5e1"))
+                textSize = 10f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            statsRow.addView(folderTxt)
+
+            filesCountTxt = TextView(this).apply {
+                text = "الملفات: 0"
+                setTextColor(Color.parseColor("#ffd700"))
+                textSize = 10f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            statsRow.addView(filesCountTxt)
+            expandedCardLayout.addView(statsRow)
+
+            // Last Event text view block
+            lastActionTxt = TextView(this).apply {
+                text = "آخر إجراء: لا توجد عمليات نشطة"
+                setTextColor(Color.parseColor("#cbd5e1"))
+                textSize = 9.5f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                background = createRoundedDrawable("#0f172a", 4f)
+                setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+                val lParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, dpToPx(4), 0, dpToPx(10))
+                }
+                layoutParams = lParams
+            }
+            expandedCardLayout.addView(lastActionTxt)
+
+            // Primary Manual Copy processing trigger button
+            val manualTriggerBtn = Button(this).apply {
+                text = "⚡ معالجة الحافظة الآن"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                background = createRoundedDrawable("#d97706", 8f)
+                setPadding(0, 0, 0, 0)
+                setOnClickListener {
+                    manualTriggerClipboardFromBubble()
+                }
+                val bParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
+                    setMargins(0, 0, 0, dpToPx(8))
+                }
+                layoutParams = bParams
+            }
+            expandedCardLayout.addView(manualTriggerBtn)
+
+            // Action Row buttons (Toggle status, Settings, Exit/Close)
+            val actionBtnsRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+
+            toggleStatusBtn = Button(this).apply {
+                textSize = 9.5f
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#475569", 6f)
+                setPadding(0, 0, 0, 0)
+                setOnClickListener {
+                    toggleClipboardServicePause()
+                    updateStatusUI()
+                }
+                val tParams = LinearLayout.LayoutParams(0, dpToPx(30), 1f).apply {
+                    setMargins(0, 0, dpToPx(4), 0)
+                }
+                layoutParams = tParams
+            }
+            actionBtnsRow.addView(toggleStatusBtn)
+
+            val settingsBtn = Button(this).apply {
+                text = "الإعدادات"
+                textSize = 9.5f
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#475569", 6f)
+                setPadding(0, 0, 0, 0)
+                setOnClickListener {
+                    launchAppMain()
+                }
+                val sParams = LinearLayout.LayoutParams(0, dpToPx(30), 1f).apply {
+                    setMargins(0, 0, dpToPx(4), 0)
+                }
+                layoutParams = sParams
+            }
+            actionBtnsRow.addView(settingsBtn)
+
+            val stopBtn = Button(this).apply {
+                text = "إغلاق"
+                textSize = 9.5f
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#991b1b", 6f)
+                setPadding(0, 0, 0, 0)
+                setOnClickListener {
+                    removeFloatingView()
+                    stopSelf()
+                }
+                val clParams = LinearLayout.LayoutParams(0, dpToPx(30), 1f)
+                layoutParams = clParams
+            }
+            actionBtnsRow.addView(stopBtn)
+
+            expandedCardLayout.addView(actionBtnsRow)
+
+            val expandedCardParams = FrameLayout.LayoutParams(dpToPx(260), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER
+            }
+            rootLayout.addView(expandedCardLayout, expandedCardParams)
+
+            // Draggability Logic
+            var initialX = 0
+            var initialY = 0
+            var initialTouchX = 0f
+            var initialTouchY = 0f
+            var isMoving = false
+
+            val dragTouchListener = View.OnTouchListener { view, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = params.x
+                        initialY = params.y
+                        initialTouchX = event.rawX
+                        initialTouchY = event.rawY
+                        isMoving = false
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val deltaX = event.rawX - initialTouchX
+                        val deltaY = event.rawY - initialTouchY
+                        if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
+                            isMoving = true
+                        }
+                        params.x = initialX + deltaX.toInt()
+                        params.y = initialY + deltaY.toInt()
+                        try {
+                            windowManager.updateViewLayout(rootLayout, params)
+                        } catch (e: Exception) {
+                            Log.e("BubbleService", "Error updateViewLayout: ${e.message}")
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if (!isMoving) {
+                            view.performClick()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            collapsedLayout.setOnTouchListener(dragTouchListener)
+            collapsedLayout.setOnClickListener {
+                collapsedLayout.visibility = View.GONE
+                expandedCardLayout.visibility = View.VISIBLE
+            }
+
+            headerLayout.setOnTouchListener(dragTouchListener)
+
+            // Reactively fetch DB stats using Coroutine Collection
+            serviceScope.launch {
+                database.dao().getAllCreatedFiles().collect { files ->
+                    val totalFilesCount = files.distinctBy { it.path }.size
+                    withContext(Dispatchers.Main) {
+                        try {
+                            filesCountTxt.text = "الملفات: $totalFilesCount"
+                        } catch (e: Exception) {}
                     }
                 }
             }
 
-            val recomposer = Recomposer(Dispatchers.Main)
-            composeView.setParentCompositionContext(recomposer)
-            serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                try {
-                    recomposer.runRecomposeAndApplyChanges()
-                } catch (e: Exception) {
-                    Log.e("BubbleService", "Recomposer error: ${e.message}")
+            serviceScope.launch {
+                database.dao().getAllLogs().collect { logs ->
+                    val lastAction = logs.firstOrNull()?.message ?: "لا توجد عمليات نشطة"
+                    withContext(Dispatchers.Main) {
+                        try {
+                            lastActionTxt.text = "آخر إجراء: $lastAction"
+                        } catch (e: Exception) {}
+                    }
                 }
             }
 
-            frameLayout.addView(composeView)
-            floatingView = frameLayout
+            // Sync states with SharedPreferences initially
+            updateStatusUI()
 
-            windowManager.addView(frameLayout, params)
-            
-            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
-            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+            floatingView = rootLayout
+            windowManager.addView(rootLayout, params)
 
         } catch (e: Exception) {
             Log.e("BubbleService", "Error displaying bubble overlay: ${e.message}", e)
-            try {
-                Toast.makeText(applicationContext, "فشل تشغيل الكرة العائمة: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
-                removeFloatingView()
-                stopSelf()
-            } catch (ex: Exception) {
-                Log.e("BubbleService", "Error inside catch block: ${ex.message}")
-            }
-        }
-
-        return START_STICKY
-    }
-
-    @Composable
-    fun BubbleCollapsedDot(onExpand: () -> Unit, onDrag: (Float, Float) -> Unit) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(Color(0xFFFFD700), Color(0xFFB8860B)),
-                    )
-                )
-                .border(1.5.dp, Color.White, CircleShape)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { /* silent start */ },
-                        onDragEnd = { /* silent completed */ },
-                        onDragCancel = { /* silent cancel */ },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            onDrag(dragAmount.x, dragAmount.y)
-                        }
-                    )
-                }
-                .clickable { onExpand() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Star,
-                contentDescription = "قائمة الأتمتة",
-                tint = Color.Black,
-                modifier = Modifier.size(26.dp)
-            )
-        }
-    }
-
-    @Composable
-    fun BubbleExpandedCard(onCollapse: () -> Unit, onDrag: (Float, Float) -> Unit) {
-        val createdFilesFlow = remember { database.dao().getAllCreatedFiles() }
-        val logsFlow = remember { database.dao().getAllLogs() }
-
-        val createdFiles by createdFilesFlow.collectAsState(initial = emptyList())
-        val logs by logsFlow.collectAsState(initial = emptyList())
-
-        val baseDir = getBaseDir()
-        val totalFilesCount = remember(createdFiles) { createdFiles.distinctBy { it.path }.size }
-        val lastAction = remember(logs) { logs.firstOrNull()?.message ?: "لا توجد عمليات نشطة" }
-
-        val pIsPaused = remember { mutableStateOf(isPaused) }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .width(260.dp)
-                .border(
-                    width = 1.2.dp,
-                    brush = Brush.horizontalGradient(listOf(Color(0xFFFFD700), Color(0xFFB8860B))),
-                    shape = RoundedCornerShape(16.dp)
-                )
-        ) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                // Header (Drag Area)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .pointerInput(Unit) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    onDrag(dragAmount.x, dragAmount.y)
-                                }
-                            )
-                        }
-                        .padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(16.dp))
-                        Text(
-                            text = "منصة الأتمتة",
-                            color = Color(0xFFFFD700),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    IconButton(
-                        onClick = { onCollapse() },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = "تصغير", tint = Color.LightGray, modifier = Modifier.size(16.dp))
-                    }
-                }
-
-                Divider(color = Color(0xFF334155))
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Monitoring status row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("المراقبة الفورية:", color = Color.Gray, fontSize = 11.sp)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (pIsPaused.value) Color.Red else Color.Green)
-                        )
-                        Text(
-                            text = if (pIsPaused.value) "متوقف" else "نشط",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // File stats and layout info
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("المجلد: ${baseDir.name}", color = Color.LightGray, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text("الملفات: $totalFilesCount", color = Color(0xFFFFD700), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Last action log
-                Text(
-                    text = "آخر إجراء: $lastAction",
-                    color = Color.LightGray,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.background(Color(0xFF0F172A), RoundedCornerShape(4.dp)).fillMaxWidth().padding(4.dp)
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Actions buttons
-                Button(
-                    onClick = { manualTriggerClipboardFromBubble() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth().height(32.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
-                        Text("⚡ معالجة الحافظة الآن", fontSize = 10.sp, color = Color.White)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // Toggle Active state button
-                    Button(
-                        onClick = {
-                            toggleClipboardServicePause()
-                            pIsPaused.value = isPaused
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
-                        shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f).height(28.dp),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text(text = if (pIsPaused.value) "استئناف" else "إيقاف", fontSize = 9.sp, color = Color.White)
-                    }
-
-                    // Open App button
-                    Button(
-                        onClick = { launchAppMain() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
-                        shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f).height(28.dp),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text(text = "الإعدادات", fontSize = 9.sp, color = Color.White)
-                    }
-
-                    // Self Hide Bubble button
-                    Button(
-                        onClick = {
-                            removeFloatingView()
-                            stopSelf()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF991B1B)),
-                        shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f).height(28.dp),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text(text = "إغلاق", fontSize = 9.sp, color = Color.White)
-                    }
-                }
-            }
+            Toast.makeText(applicationContext, "فشل تشغيل الكرة العائمة: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+            removeFloatingView()
+            stopSelf()
         }
     }
 
