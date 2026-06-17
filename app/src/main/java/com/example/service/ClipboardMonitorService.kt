@@ -45,6 +45,17 @@ class ClipboardMonitorService : Service() {
     private lateinit var builderEngine: BuilderEngine
     private lateinit var database: AppDatabase
 
+    private val clipboardBroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.example.ACTION_CLIPBOARD_UPDATED") {
+                val text = intent.getStringExtra("clip_text") ?: ""
+                if (text.isNotBlank()) {
+                    processCopiedText(text)
+                }
+            }
+        }
+    }
+
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         checkClipboard()
     }
@@ -56,17 +67,29 @@ class ClipboardMonitorService : Service() {
         database = AppDatabase.getDatabase(this)
         
         // Settings configuration matching engine expectations
+        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
+        val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
+        val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
+
         val settings = mapOf<String, Any>(
             "absolute_path_handling" to "relative",
             "base_dir" to getBaseDir().absolutePath,
-            "directive_prefixes" to listOf("@builder"),
-            "executor_prefixes" to listOf("@executor"),
-            "treedoc_prefixes" to listOf("@treedoc")
+            "directive_prefixes" to listOf(pBuilder),
+            "executor_prefixes" to listOf(pExecutor),
+            "treedoc_prefixes" to listOf(pTreedoc)
         )
         builderEngine = BuilderEngine(this, settings)
         
-        // Register listener
+        // Register listeners
         clipboardManager.addPrimaryClipChangedListener(clipListener)
+        val filter = IntentFilter("com.example.ACTION_CLIPBOARD_UPDATED")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(clipboardBroadcastReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(clipboardBroadcastReceiver, filter)
+        }
+        
         createNotificationChannel()
         
         logSystemEvent("الحصول على المراقبة", "تبدأ الخدمة الخلفية الآن لمراقبة الحافظة وتأمين التوجيهات.")
@@ -105,13 +128,25 @@ class ClipboardMonitorService : Service() {
 
     private fun checkClipboard() {
         if (isPaused) return
+        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val isAutoProcess = sharedPrefs.getBoolean("auto_process_clipboard", true)
+        if (!isAutoProcess) return
+
         if (!clipboardManager.hasPrimaryClip()) return
         val clipData = clipboardManager.primaryClip ?: return
         if (clipData.itemCount == 0) return
         val text = clipData.getItemAt(0).text?.toString() ?: return
 
-        if (text.isNotBlank() && (text.contains("@builder:") || text.contains("@executor:") || text.contains("@treedoc:"))) {
-            processCopiedText(text)
+        val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
+        val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
+        val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
+
+        if (text.isNotBlank() && (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:"))) {
+            val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
+            if (text != lastProcessed) {
+                sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
+                processCopiedText(text)
+            }
         }
     }
 
@@ -205,6 +240,10 @@ class ClipboardMonitorService : Service() {
     }
 
     private fun getBaseDir(): File {
+        val path = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getString("base_dir_path", null)
+        if (!path.isNullOrBlank()) {
+            return File(path).also { it.mkdirs() }
+        }
         return if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
             File(getExternalFilesDir(null), "SmartPlatform")
         } else {
@@ -274,6 +313,11 @@ class ClipboardMonitorService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         clipboardManager.removePrimaryClipChangedListener(clipListener)
+        try {
+            unregisterReceiver(clipboardBroadcastReceiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Unregister receiver fail: ${e.message}")
+        }
         serviceScope.cancel()
         Log.d(TAG, "Service onDestroy")
     }

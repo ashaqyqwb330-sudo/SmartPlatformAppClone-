@@ -343,6 +343,11 @@ class BuilderEngine(
             return File(custom).also { it.mkdirs() }
         }
         
+        val customBase = settings["base_dir"] as? String
+        if (!customBase.isNullOrBlank()) {
+            return File(customBase).also { it.mkdirs() }
+        }
+        
         // Default base dir: External storage if writable, otherwise internal filesDir
         val baseDir = if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
             File(context.getExternalFilesDir(null), "SmartPlatform")

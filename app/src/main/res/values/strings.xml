@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">المنصة الذكية</string>
+    <string name="accessibility_desc">مساعد الحافظة الخلفي للمنصة الذكية: يسمح بالتقاط توجيهات أتمتة الملفات والمجلدات بمجرد نسخها في أي تطبيق دون الحاجة لفتح الواجهة يدوياً.</string>
 </resources>

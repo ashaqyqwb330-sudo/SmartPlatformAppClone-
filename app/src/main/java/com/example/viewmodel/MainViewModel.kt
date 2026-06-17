@@ -40,10 +40,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isServicePaused = MutableStateFlow(false)
     val isServicePaused: StateFlow<Boolean> = _isServicePaused.asStateFlow()
 
+    private val _autoProcessClipboard = MutableStateFlow(true)
+    val autoProcessClipboard: StateFlow<Boolean> = _autoProcessClipboard.asStateFlow()
+
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "clipboard_is_paused") {
             val isPaused = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
             _isServicePaused.value = isPaused
+        } else if (key == "auto_process_clipboard") {
+            val isAutoVal = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("auto_process_clipboard", true)
+            _autoProcessClipboard.value = isAutoVal
         }
     }
 
@@ -73,6 +79,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         navigateToBaseDir()
         context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener(prefsListener)
         _isServicePaused.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
+        _autoProcessClipboard.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("auto_process_clipboard", true)
     }
 
     private fun loadSettings() {
@@ -81,6 +88,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefixExecutor.value = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
         prefixTreedoc.value = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
         baseDirSetting.value = sharedPrefs.getString("base_dir_path", getBaseDir().absolutePath) ?: getBaseDir().absolutePath
+        _autoProcessClipboard.value = sharedPrefs.getBoolean("auto_process_clipboard", true)
     }
 
     fun savePrefixes(builder: String, executor: String, treedoc: String) {
@@ -107,6 +115,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).edit().putString("base_dir_path", path).apply()
         insertSystemLog("تغيير المجلد الافتراضي", "تم تغيير مسار مجلد الحفظ الافتراضي إلى: $path")
         navigateToBaseDir()
+    }
+
+    fun setAutoProcessClipboard(enabled: Boolean) {
+        _autoProcessClipboard.value = enabled
+        context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).edit().putBoolean("auto_process_clipboard", enabled).apply()
+        insertSystemLog("تحديث معالجة الحافظة", "تم ضبط ميزة المعالجة التلقائية للحافظة إلى: ${if (enabled) "مفعّل" else "ملغى"}")
     }
 
     fun checkServiceStatus() {
