@@ -1,0 +1,6 @@
+{
+  "name": "المنصة الذكية",
+  "description": "منصة ذكية متكاملة لأجهزة الأندرويد تتيح مراقبة الحافظة، إنشاء الملفات التلقائي عبر التوجيهات، توليد كشوفات شجرية دقيقة والمحاكاة الذكية المذهلة بالشرائط الذهبية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
