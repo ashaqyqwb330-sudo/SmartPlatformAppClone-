@@ -30,7 +30,15 @@ class ClipboardMonitorService : Service() {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
         const val ACTION_TRIGGER_SCAN = "ACTION_TRIGGER_SCAN"
+        const val ACTION_PAUSE = "ACTION_PAUSE"
+        const val ACTION_RESUME = "ACTION_RESUME"
     }
+
+    private var isPaused: Boolean
+        get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
+        set(value) {
+            getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).edit().putBoolean("clipboard_is_paused", value).apply()
+        }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var clipboardManager: ClipboardManager
@@ -73,14 +81,20 @@ class ClipboardMonitorService : Service() {
             return START_NOT_STICKY
         }
 
-        val notification = buildNotification("مراقب الحافظة يعمل بنجاح", "جاهز لالتقاط التوجيهات الذكية @builder...")
+        if (action == ACTION_PAUSE) {
+            isPaused = true
+            logSystemEvent("إيقاف مؤقت", "تم إيضاح حالة الإيقاف المؤقت لعملية مراقبة الخلفية.")
+        } else if (action == ACTION_RESUME) {
+            isPaused = false
+            logSystemEvent("استئناف المراقبة", "تم استئناف مراقبة الخلفية للحافظة من جديد.")
+        }
+
+        val title = if (isPaused) "مراقب الحافظة: متوقف مؤقتاً" else "مراقب الحافظة يعمل بنجاح"
+        val text = if (isPaused) "المراقبة متوقفة مؤقتاً. اضغط لاستئناف المعالجة." else "جاهز لالتقاط التوجيهات الذكية @builder..."
+        val notification = buildNotification(title, text)
         
         // Support all foreground service type declarations for Android 14+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        startForeground(NOTIFICATION_ID, notification)
 
         if (action == ACTION_TRIGGER_SCAN) {
             checkClipboard()
@@ -90,6 +104,7 @@ class ClipboardMonitorService : Service() {
     }
 
     private fun checkClipboard() {
+        if (isPaused) return
         if (!clipboardManager.hasPrimaryClip()) return
         val clipData = clipboardManager.primaryClip ?: return
         if (clipData.itemCount == 0) return
@@ -226,6 +241,16 @@ class ClipboardMonitorService : Service() {
             this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE
         )
 
+        val pauseResumeIntent = Intent(this, ClipboardMonitorService::class.java).apply {
+            action = if (isPaused) ACTION_RESUME else ACTION_PAUSE
+        }
+        val pendingPauseResumeIntent = PendingIntent.getService(
+            this, 2, pauseResumeIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val pauseResumeLabel = if (isPaused) "استئناف المراقبة" else "إيقاف مؤقت"
+        val pauseResumeIcon = if (isPaused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause
+
         val colorGold = 0xFFD4AF37.toInt()
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -235,6 +260,7 @@ class ClipboardMonitorService : Service() {
             .setColor(colorGold)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .addAction(pauseResumeIcon, pauseResumeLabel, pendingPauseResumeIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "إيقاف المراقبة", pendingStopIntent)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .build()

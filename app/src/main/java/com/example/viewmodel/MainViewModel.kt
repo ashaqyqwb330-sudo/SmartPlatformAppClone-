@@ -3,6 +3,7 @@ package com.example.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Build
 import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
@@ -36,6 +37,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isServiceRunning = MutableStateFlow(false)
     val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
 
+    private val _isServicePaused = MutableStateFlow(false)
+    val isServicePaused: StateFlow<Boolean> = _isServicePaused.asStateFlow()
+
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "clipboard_is_paused") {
+            val isPaused = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
+            _isServicePaused.value = isPaused
+        }
+    }
+
     private val _geminiLoading = MutableStateFlow(false)
     val geminiLoading: StateFlow<Boolean> = _geminiLoading.asStateFlow()
 
@@ -60,6 +71,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadSettings()
         checkServiceStatus()
         navigateToBaseDir()
+        context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener(prefsListener)
+        _isServicePaused.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
     }
 
     private fun loadSettings() {
@@ -103,6 +116,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.service.className == ClipboardMonitorService::class.java.name
         }
         _isServiceRunning.value = isRunning
+        _isServicePaused.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
+    }
+
+    fun toggleServicePause() {
+        val nextParam = !_isServicePaused.value
+        context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).edit().putBoolean("clipboard_is_paused", nextParam).apply()
+        _isServicePaused.value = nextParam
+        
+        // Notify the running service if active
+        val intent = Intent(context, ClipboardMonitorService::class.java).apply {
+            action = if (nextParam) ClipboardMonitorService.ACTION_PAUSE else ClipboardMonitorService.ACTION_RESUME
+        }
+        context.startService(intent)
+        
+        if (nextParam) {
+            insertSystemLog("إيقاف مؤقت للخدمة", "تم تعليق معالجة مدخلات الحافظة.")
+        } else {
+            insertSystemLog("استئناف الخدمة", "تم تنشيط معالجة السجلات الحافظة من جديد.")
+        }
     }
 
     fun startMonitorService() {
@@ -370,6 +402,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString("custom_gemini_api_key", key.trim())
             .apply()
         insertSystemLog("مفتاح API مخصص", "تم إرفاق مفتاح للذكاء الاصطناعي بنجاح.")
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(prefsListener)
     }
 
     private fun insertSystemLog(title: String, message: String) {

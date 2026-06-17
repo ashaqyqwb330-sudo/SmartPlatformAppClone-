@@ -504,6 +504,7 @@ fun MonitorScreen(viewModel: MainViewModel) {
     var showFileEditorDialog by remember { mutableStateOf(false) }
 
     val isServiceRunning = viewModel.isServiceRunning.collectAsState().value
+    val isServicePaused = viewModel.isServicePaused.collectAsState().value
     val createdFiles = viewModel.createdFiles.collectAsState(initial = emptyList()).value
     val eventLogs = viewModel.eventLogs.collectAsState(initial = emptyList()).value
 
@@ -552,32 +553,64 @@ fun MonitorScreen(viewModel: MainViewModel) {
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (isServiceRunning) "نشط ومتحفز للتوجيهات @" else "المراقبة متوقفة في الوقت الحالي",
-                                color = if (isServiceRunning) EmeraldGlow else TextGray,
+                                text = if (isServiceRunning) {
+                                    if (isServicePaused) "المراقبة متوقفة مؤقتاً ⏸️" else "نشط ومتحفز للتوجيهات @"
+                                } else "المراقبة متوقفة في الوقت الحالي",
+                                color = if (isServiceRunning) {
+                                    if (isServicePaused) Color(0xFFFF9800) else EmeraldGlow
+                                } else TextGray,
                                 fontSize = 11.sp
                             )
                         }
                     }
 
-                    Switch(
-                        checked = isServiceRunning,
-                        onCheckedChange = { isChecked ->
-                            if (isChecked) {
-                                viewModel.startMonitorService()
-                                Toast.makeText(context, "تم تفعيل مراقبة الحافظة في الخلفية", Toast.LENGTH_SHORT).show()
-                            } else {
-                                viewModel.stopMonitorService()
-                                Toast.makeText(context, "تم إيقاف خدمة مراقبة الحافظة", Toast.LENGTH_SHORT).show()
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isServiceRunning) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.toggleServicePause()
+                                    if (isServicePaused) {
+                                        Toast.makeText(context, "تم استئناف المراقبة بنجاح", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "تم إيقاف المراقبة مؤقتاً", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = if (isServicePaused) EmeraldGlow else Color(0xFFFF9800)
+                                ),
+                                modifier = Modifier.testTag("pause_resume_button")
+                            ) {
+                                Text(
+                                    text = if (isServicePaused) "استئناف" else "إيقاف مؤقت",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = SlateBg,
-                            checkedTrackColor = MetallicGold,
-                            uncheckedThumbColor = TextGray,
-                            uncheckedTrackColor = GlassWhite
-                        ),
-                        modifier = Modifier.testTag("service_switch")
-                    )
+                        }
+
+                        Switch(
+                            checked = isServiceRunning,
+                            onCheckedChange = { isChecked ->
+                                if (isChecked) {
+                                    viewModel.startMonitorService()
+                                    Toast.makeText(context, "تم تفعيل مراقبة الحافظة في الخلفية", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    viewModel.stopMonitorService()
+                                    Toast.makeText(context, "تم إيقاف خدمة مراقبة الحافظة", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = SlateBg,
+                                checkedTrackColor = MetallicGold,
+                                uncheckedThumbColor = TextGray,
+                                uncheckedTrackColor = GlassWhite
+                            ),
+                            modifier = Modifier.testTag("service_switch")
+                        )
+                    }
                 }
             }
         }
