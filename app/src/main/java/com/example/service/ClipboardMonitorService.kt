@@ -1,30 +1,28 @@
 package com.example.service
 
 import android.app.*
-import android.content.*
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Build
-import android.os.Environment
 import android.os.IBinder
 import android.util.Log
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.db.AppDatabase
-import com.example.db.FileEntity
 import com.example.db.LogEntity
-import com.example.engine.BuilderEngine
 import kotlinx.coroutines.*
-import java.io.File
 
 /**
- * خدمة الحافظة الذكية (Foreground Service)
+ * خدمة الحافظة المراقبة (Foreground Service)
  *
- * تراقب التغييرات في الحافظة وتحلل النصوص باستخدام BuilderEngine
+ * تبسيط الخدمة لتصبح واجهة للتحكم بالإيقاف المؤقت/الاستئناف والربط ببلاطات الإعدادات السريعة
  */
 class ClipboardMonitorService : Service() {
 
     companion object {
-        const val TAG = "ClipboardService"
+        const val TAG = "ClipboardMonitorService"
         const val CHANNEL_ID = "SmartPlatformChannel"
         const val NOTIFICATION_ID = 88
 
@@ -42,64 +40,21 @@ class ClipboardMonitorService : Service() {
         }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private lateinit var clipboardManager: ClipboardManager
-    private lateinit var builderEngine: BuilderEngine
     private lateinit var database: AppDatabase
 
-    private val clipboardBroadcastReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.example.ACTION_CLIPBOARD_UPDATED") {
-                val text = intent.getStringExtra("clip_text") ?: ""
-                if (text.isNotBlank()) {
-                    processCopiedText(text)
-                }
-            }
-        }
-    }
-
-    private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
-        checkClipboard()
-    }
-
     override fun onCreate() {
-        super.onCreate();
-        Log.d(TAG, "Service onCreate")
-        clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        super.onCreate()
+        Log.d(TAG, "ClipboardMonitorService onCreate")
         database = AppDatabase.getDatabase(this)
-        
-        // Settings configuration matching engine expectations
-        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
-        val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
-        val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
-        val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
-
-        val settings = mapOf<String, Any>(
-            "absolute_path_handling" to "relative",
-            "base_dir" to getBaseDir().absolutePath,
-            "directive_prefixes" to listOf(pBuilder),
-            "executor_prefixes" to listOf(pExecutor),
-            "treedoc_prefixes" to listOf(pTreedoc)
-        )
-        builderEngine = BuilderEngine(this, settings)
-        
-        // Register listeners
-        clipboardManager.addPrimaryClipChangedListener(clipListener)
-        val filter = IntentFilter("com.example.ACTION_CLIPBOARD_UPDATED")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(clipboardBroadcastReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(clipboardBroadcastReceiver, filter)
-        }
-        
         createNotificationChannel()
-        
-        logSystemEvent("الحصول على المراقبة", "تبدأ الخدمة الخلفية الآن لمراقبة الحافظة وتأمين التوجيهات.")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
+        Log.d(TAG, "onStartCommand Action: $action")
+        
         if (action == ACTION_STOP) {
-            logSystemEvent("إيقاف المراقبة", "تم إيقاف خدمة المراقبة يدوياً بطلب المستخدم.")
+            logSystemEvent("إيقاف مراقب الحالة", "تم إيقاف الواجهة الخلفية والإيقاف المؤقت للمراقب المساعد.")
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -107,163 +62,19 @@ class ClipboardMonitorService : Service() {
 
         if (action == ACTION_PAUSE) {
             isPaused = true
-            logSystemEvent("إيقاف مؤقت", "تم إيضاح حالة الإيقاف المؤقت لعملية مراقبة الخلفية.")
+            logSystemEvent("إيقاف مؤقت", "تم تفعيل حالة الإيقاف المؤقت للمراقبة.")
         } else if (action == ACTION_RESUME) {
             isPaused = false
-            logSystemEvent("استئناف المراقبة", "تم استئناف مراقبة الخلفية للحافظة من جديد.")
+            logSystemEvent("استئناف المراقبة", "تم استئناف المكونات ومراقبة الحافظة بنشاط.")
         }
 
         val title = if (isPaused) "مراقب الحافظة: متوقف مؤقتاً" else "مراقب الحافظة يعمل بنجاح"
-        val text = if (isPaused) "المراقبة متوقفة مؤقتاً. اضغط لاستئناف المعالجة." else "جاهز لالتقاط التوجيهات الذكية @builder..."
+        val text = if (isPaused) "المراقبة متوقفة مؤقتاً. اضغط لاستئناف المعالجة." else "جاهز لالتقاط التوجيهات من الحافظة بالخلفية..."
         val notification = buildNotification(title, text)
         
-        // Support all foreground service type declarations for Android 14+
         startForeground(NOTIFICATION_ID, notification)
 
-        if (action == ACTION_TRIGGER_SCAN) {
-            checkClipboard()
-        }
-
         return START_STICKY
-    }
-
-    private fun checkClipboard() {
-        if (isPaused) return
-        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
-        val isAutoProcess = sharedPrefs.getBoolean("auto_process_clipboard", true)
-        if (!isAutoProcess) return
-
-        if (!clipboardManager.hasPrimaryClip()) return
-        val clipData = clipboardManager.primaryClip ?: return
-        if (clipData.itemCount == 0) return
-        val text = clipData.getItemAt(0).text?.toString() ?: return
-
-        if (text.isBlank()) return
-
-        val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
-        val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
-        val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
-
-        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
-        if (text == lastProcessed) return
-
-        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:")) {
-            processCopiedText(text)
-        } else {
-            // No saved directives found. Only show Toast if text is long enough (e.g. >= 8 chars) to avoid spamming tiny copy-paste
-            if (text.trim().length >= 8) {
-                sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
-                serviceScope.launch(Dispatchers.Main) {
-                    try {
-                        Toast.makeText(applicationContext, "⚠️ نص منسوخ لا يحتوي على توجيهات حفظ؛ لم يتم الحفظ تلقائياً.", Toast.LENGTH_LONG).show()
-                    } catch (e: Exception) {}
-                }
-                logSystemEvent("تجاوز النسخ (لا توجد توجيهات)", "تم تجاوز الحفظ لعدم العثور على بادئات نشطة في النص المنسوخ.")
-                updateNotification("مراقب الحافظة يعمل بنجاح", "جاهز - تم تجاوز حفظ آخر نص منسوخ لعدم وجود توجيهات صالحة.")
-            }
-        }
-    }
-
-    private fun processCopiedText(text: String) {
-        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
-        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
-        if (text == lastProcessed && text.isNotBlank()) {
-            return
-        }
-        // Save to preferences immediately on first ENTRY to prevent any concurrency loops
-        sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
-
-        serviceScope.launch {
-            logSystemEvent("توجيه مكتشف", "تم التقاط محتويات الحافظة. بدء المعالجة الذكية...")
-            updateNotification("معالجة التوجيهات...", "يرجى الانتظار، يجري معالجة الملفات والتعليمات.")
-
-            try {
-                val results = builderEngine.processText(text)
-                if (results.isEmpty()) {
-                    logSystemEvent("معالجة فارغة", "لم يتم العثور على توجيهات صالحة أو مطابقة في النص الملتقط.")
-                    updateNotification("مراقب الحافظة يعمل بنجاح", "جاهز لالتقاط التوجيهات الذكية...")
-                    return@launch
-                }
-
-                var buildersCount = 0
-                var executorsCount = 0
-                var treedocCount = 0
-
-                for (res in results) {
-                    when (res.type) {
-                        "builder" -> {
-                            buildersCount++
-                            // Write database entry
-                            val path = res.data?.get("path") ?: "unknown"
-                            val size = res.data?.get("size")?.toLongOrNull() ?: 0L
-                            val mode = res.data?.get("mode") ?: "w"
-                            val fullPath = res.data?.get("full_path") ?: ""
-                            
-                            database.dao().insertFile(
-                                FileEntity(
-                                    path = path,
-                                    fullPath = fullPath,
-                                    size = size,
-                                    mode = mode
-                                )
-                            )
-                            database.dao().insertLog(
-                                LogEntity(
-                                    type = "builder",
-                                    message = "تم إنشاء الملف: $path",
-                                    details = res.message
-                                )
-                            )
-                        }
-                        "executor" -> {
-                            executorsCount++
-                            database.dao().insertLog(
-                                LogEntity(
-                                    type = "executor",
-                                    message = "تنفيذ أمر المنفذ",
-                                    details = res.message
-                                )
-                            )
-                        }
-                        "treedoc" -> {
-                            treedocCount++
-                            database.dao().insertLog(
-                                LogEntity(
-                                    type = "treedoc",
-                                    message = "توليد تقرير TreeDoc الشجري",
-                                    details = res.message
-                                )
-                            )
-                        }
-                    }
-                }
-
-                val summary = "تم بنجاح: $buildersCount ملفات، $executorsCount أوامر، $treedocCount تقارير شجرية."
-                logSystemEvent("نجاح المعالجة الكاملة", summary)
-                updateNotification("نجحت المعالجة الذكية", summary)
-
-                // Clear clipboard securely if selected
-                val clearClip = sharedPrefs.getBoolean("clear_clip_after_save", false)
-                if (clearClip) {
-                    withContext(Dispatchers.Main) {
-                        try {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                clipboardManager.clearPrimaryClip()
-                            } else {
-                                clipboardManager.setPrimaryClip(ClipData.newPlainText("", ""))
-                            }
-                            Toast.makeText(applicationContext, "🧹 تم مسح وتفريغ الحافظة تلقائياً بنجاح لمنع التكرار وحماية الخصوصية.", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error clearing clipboard: ${e.message}")
-                        }
-                    }
-                }
-
-            } catch (e: Exception) {
-                logSystemEvent("خطأ في المعالجة", "فشل المحرك في معالجة النص: ${e.message}")
-                updateNotification("فشلت المعالجة الذكية", "تفاصيل: ${e.message}")
-            }
-        }
     }
 
     private fun logSystemEvent(title: String, message: String) {
@@ -276,18 +87,6 @@ class ClipboardMonitorService : Service() {
                 )
             )
         }
-    }
-
-    private fun getBaseDir(): File {
-        val path = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getString("base_dir_path", null)
-        if (!path.isNullOrBlank()) {
-            return File(path).also { it.mkdirs() }
-        }
-        return if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
-            File(getExternalFilesDir(null), "SmartPlatform")
-        } else {
-            File(filesDir, "SmartPlatform")
-        }.also { it.mkdirs() }
     }
 
     private fun createNotificationChannel() {
@@ -344,21 +143,10 @@ class ClipboardMonitorService : Service() {
             .build()
     }
 
-    private fun updateNotification(title: String, text: String) {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, text))
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        clipboardManager.removePrimaryClipChangedListener(clipListener)
-        try {
-            unregisterReceiver(clipboardBroadcastReceiver)
-        } catch (e: Exception) {
-            Log.e(TAG, "Unregister receiver fail: ${e.message}")
-        }
         serviceScope.cancel()
-        Log.d(TAG, "Service onDestroy")
+        Log.d(TAG, "ClipboardMonitorService onDestroy")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
