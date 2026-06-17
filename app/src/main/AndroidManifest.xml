@@ -78,6 +78,12 @@
             android:enabled="true"
             android:exported="false" />
 
+        <!-- خدمة الكرة العائمة الذهبية V2 الجديدة -->
+        <service
+            android:name=".service.GoldenBubbleService"
+            android:enabled="true"
+            android:exported="false" />
+
         <!-- لوحة مفاتيح الأتمتة الذكية -->
         <service
             android:name=".service.BuilderIME"

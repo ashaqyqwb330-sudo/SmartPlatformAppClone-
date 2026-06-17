@@ -2417,6 +2417,7 @@ fun PermissionsDashboardDialog(
     var hasOverlay by remember { mutableStateOf(false) }
     var hasImeEnabled by remember { mutableStateOf(false) }
     var isBubbleRunning by remember { mutableStateOf(false) }
+    var isGoldenBubbleRunning by remember { mutableStateOf(false) }
     
     fun refreshStates() {
         hasNotify = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -2440,6 +2441,10 @@ fun PermissionsDashboardDialog(
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         isBubbleRunning = activityManager?.getRunningServices(Integer.MAX_VALUE)?.any {
             it.service.className == "com.example.service.BubbleService"
+        } ?: false
+
+        isGoldenBubbleRunning = activityManager?.getRunningServices(Integer.MAX_VALUE)?.any {
+            it.service.className == "com.example.service.GoldenBubbleService"
         } ?: false
     }
     
@@ -2651,6 +2656,78 @@ fun PermissionsDashboardDialog(
                                     ) {
                                         Text(
                                             text = if (isBubbleRunning) "إغلاق وتعطيل الكرة العائمة" else "تشغيل وتفعيل الكرة العائمة الآن",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1D3A)),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.2.dp, Brush.linearGradient(listOf(MetallicGold, BrightGold)))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "👑 الفقاعة الذهبية V2 (جديد)",
+                                            color = BrightGold,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = if (isGoldenBubbleRunning) "🟢 نشطة وظاهرة" else "🔴 غير مفعلة",
+                                            color = if (isGoldenBubbleRunning) BrightGold else Color.Gray,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    
+                                    Text(
+                                        text = "النسخة الذهبية V2 فائقة الاستقرار والسرعة. تتيح لك المراقبة التلقائية لقيم الحافظة ومعالجتها فورياً وتوليف الملفات فوق أي تطبيق بدون كيبورد.",
+                                        color = TextSilver,
+                                        fontSize = 11.sp
+                                    )
+                                    
+                                    Button(
+                                        onClick = {
+                                            try {
+                                                val serviceIntent = Intent(context, com.example.service.GoldenBubbleService::class.java)
+                                                if (isGoldenBubbleRunning) {
+                                                    serviceIntent.action = "STOP"
+                                                    context.stopService(serviceIntent)
+                                                    Toast.makeText(context, "تم إيقاف خدمة الفقاعة الذهبية.", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    context.startService(serviceIntent)
+                                                    Toast.makeText(context, "تم تشغيل الفقاعة الذهبية V2 بنجاح!", Toast.LENGTH_SHORT).show()
+                                                }
+                                                refreshStates()
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "فشل التحكم بالخدمة: ${e.message}", Toast.LENGTH_LONG).show()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isGoldenBubbleRunning) Color(0xFFDC2626) else BrightGold,
+                                            contentColor = if (isGoldenBubbleRunning) Color.White else SlateBg
+                                        ),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isGoldenBubbleRunning) "إيقاف الفقاعة الذهبية" else "تشغيل الفقاعة الذهبية V2 الآن",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
                                         )

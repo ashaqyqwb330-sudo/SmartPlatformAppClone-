@@ -1,0 +1,629 @@
+package com.example.service
+
+import android.annotation.SuppressLint
+import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Environment
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.util.Log
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import com.example.db.AppDatabase
+import com.example.db.FileEntity
+import com.example.db.LogEntity
+import com.example.engine.BuilderEngine
+import com.example.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/**
+ * الخدمة العائمة الذهبية V2 - Golden Bubble Service
+ * واجهة تقليدية View-based بحتة لضمان أقصى مستويات الأداء والاستقرار وسرعة الاستجابة.
+ * لا تحتوي على أي أكواد Compose لتفادي أي انهيار غير متوقع على مختلف الأجهزة.
+ */
+class GoldenBubbleService : Service(), LifecycleOwner {
+
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
+
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private lateinit var windowManager: WindowManager
+    private var rootLayout: FrameLayout? = null
+    private lateinit var database: AppDatabase
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastKnownClipText = ""
+    private var isPollingActive = false
+
+    private lateinit var statusCircle: View
+    private lateinit var statusTxt: TextView
+    private lateinit var lastActionTxt: TextView
+    private lateinit var toggleStatusBtn: Button
+
+    private val isPaused: Boolean
+        get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
+
+    private val clipboardRunnable = object : Runnable {
+        override fun run() {
+            checkClipboardInGoldenBubble()
+            handler.postDelayed(this, 1500L)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        database = AppDatabase.getDatabase(this)
+        
+        startGoldenPolling()
+        Log.d("GoldenBubbleService", "GoldenBubbleService created and polling handler started.")
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "STOP") {
+            try {
+                removeGoldenView()
+                stopSelf()
+            } catch (e: Exception) {
+                Log.e("GoldenBubbleService", "Error stopping service: ${e.message}")
+            }
+            return START_NOT_STICKY
+        }
+
+        if (rootLayout != null) return START_STICKY
+
+        setupGoldenView()
+
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
+        return START_STICKY
+    }
+
+    private fun startGoldenPolling() {
+        if (!isPollingActive) {
+            handler.post(clipboardRunnable)
+            isPollingActive = true
+        }
+    }
+
+    private fun checkClipboardInGoldenBubble() {
+        if (isPaused) return
+        try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (clipboard.hasPrimaryClip()) {
+                val clipData = clipboard.primaryClip ?: return
+                if (clipData.itemCount > 0) {
+                    val text = clipData.getItemAt(0).text?.toString() ?: ""
+                    if (text.isNotBlank() && text != lastKnownClipText) {
+                        lastKnownClipText = text
+                        onClipboardTextDetected(text)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // safe silent catch
+        }
+    }
+
+    private fun onClipboardTextDetected(text: String) {
+        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val isAutoProcess = sharedPrefs.getBoolean("auto_process_clipboard", true)
+        if (!isAutoProcess) return
+
+        val textHash = text.trim().hashCode().toString()
+        val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+        if (textHash == lastProcessedHash) return
+
+        val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
+        val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
+        val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
+
+        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:")) {
+            processClipboardContent(text)
+        }
+    }
+
+    private fun processClipboardContent(text: String) {
+        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val textHash = text.trim().hashCode().toString()
+        val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+        if (textHash == lastProcessedHash && text.isNotBlank()) return
+
+        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
+        if (text == lastProcessed && text.isNotBlank()) return
+
+        sharedPrefs.edit().apply {
+            putString("last_processed_text_hash", textHash)
+            putString("last_auto_processed_text", text)
+            apply()
+        }
+
+        serviceScope.launch {
+            try {
+                val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
+                val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
+                val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
+
+                val settings = mapOf(
+                    "absolute_path_handling" to "relative",
+                    "base_dir" to getBaseDir().absolutePath,
+                    "directive_prefixes" to listOf(pBuilder),
+                    "executor_prefixes" to listOf(pExecutor),
+                    "treedoc_prefixes" to listOf(pTreedoc)
+                )
+
+                val engine = BuilderEngine(applicationContext, settings)
+                val results = engine.processText(text)
+
+                if (results.isNotEmpty()) {
+                    var buildersCount = 0
+                    for (res in results) {
+                        if (res.type == "builder") {
+                            buildersCount++
+                            val path = res.data?.get("path") ?: "unknown"
+                            val size = res.data?.get("size")?.toLongOrNull() ?: 0L
+                            val mode = res.data?.get("mode") ?: "w"
+                            val fullPath = res.data?.get("full_path") ?: ""
+
+                            database.dao().insertFile(
+                                FileEntity(path = path, fullPath = fullPath, size = size, mode = mode)
+                            )
+                            database.dao().insertLog(
+                                LogEntity(type = "builder", message = "الفقاعة الذهبية: تم إنشاء $path", details = res.message)
+                            )
+                        } else {
+                            database.dao().insertLog(
+                                LogEntity(type = res.type, message = "الفقاعة الذهبية: إجراء ${res.type}", details = res.message)
+                            )
+                        }
+                    }
+                    
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(applicationContext, "✅ معالجة ناجحة! تم إنشاء وحفظ $buildersCount ملفات.", Toast.LENGTH_SHORT).show()
+                        updateLastActionText("معالجة ناجحة: $buildersCount ملفات تلقائياً")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("GoldenBubbleService", "Error processing content: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    updateLastActionText("فشل المعالجة: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    private fun updateLastActionText(msg: String) {
+        try {
+            lastActionTxt.text = "آخر إجراء: $msg"
+        } catch (e: Exception) {}
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
+    }
+
+    private fun createCircleDrawable(colorHex: String): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(colorHex))
+        }
+    }
+
+    private fun createRoundedDrawable(colorHex: String, radiusDp: Float, strokeColorHex: String? = null, strokeWidthDp: Int = 0): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(Color.parseColor(colorHex))
+            cornerRadius = dpToPx(radiusDp.toInt()).toFloat()
+            if (strokeColorHex != null && strokeWidthDp > 0) {
+                setStroke(dpToPx(strokeWidthDp), Color.parseColor(strokeColorHex))
+            }
+        }
+    }
+
+    private fun updateStatusUI() {
+        val paused = isPaused
+        if (paused) {
+            statusCircle.background = createCircleDrawable("#ef4444")
+            statusTxt.text = "متوقف"
+            toggleStatusBtn.text = "استئناف"
+        } else {
+            statusCircle.background = createCircleDrawable("#10b981")
+            statusTxt.text = "نشط"
+            toggleStatusBtn.text = "إيقاف مؤقت"
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
+    private fun setupGoldenView() {
+        try {
+            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE
+                },
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 150
+                y = 250
+            }
+
+            // Root FrameLayout
+            val root = FrameLayout(this)
+
+            // 1. COLLAPSED DOT VIEW (Gold theme)
+            val collapsedLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                background = createCircleDrawable("#1A1A2E").apply {
+                    setStroke(dpToPx(2), Color.parseColor("#FFD700"))
+                }
+            }
+            val logoTxt = TextView(this).apply {
+                text = "✨"
+                setTextColor(Color.WHITE)
+                textSize = 24f
+                gravity = Gravity.CENTER
+            }
+            collapsedLayout.addView(logoTxt)
+
+            val collapsedParams = FrameLayout.LayoutParams(dpToPx(56), dpToPx(56)).apply {
+                gravity = Gravity.CENTER
+            }
+            root.addView(collapsedLayout, collapsedParams)
+
+            // 2. EXPANDED CARD VIEW
+            val expandedLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = createRoundedDrawable("#1A1A2E", 16f, "#FFD700", 2)
+                setPadding(dpToPx(14), dpToPx(14), dpToPx(14), dpToPx(14))
+                visibility = View.GONE
+            }
+
+            // Header (Title and Close 'x' icon)
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dpToPx(6))
+            }
+
+            val titleContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val goldIcon = TextView(this).apply {
+                text = "👑"
+                textSize = 14f
+                setPadding(0, 0, dpToPx(4), 0)
+            }
+            titleContainer.addView(goldIcon)
+
+            val titleTxt = TextView(this).apply {
+                text = "المراقب الذكي الذهبي"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            titleContainer.addView(titleTxt)
+            header.addView(titleContainer)
+
+            val closeIconBtn = TextView(this).apply {
+                text = "✕"
+                setTextColor(Color.parseColor("#CBD5E1"))
+                textSize = 16f
+                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+                setOnClickListener {
+                    expandedLayout.visibility = View.GONE
+                    collapsedLayout.visibility = View.VISIBLE
+                }
+            }
+            header.addView(closeIconBtn)
+            expandedLayout.addView(header)
+
+            // Divider line
+            val divider = View(this).apply {
+                setBackgroundColor(Color.parseColor("#2E2E4E"))
+                val dParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(1)).apply {
+                    setMargins(0, dpToPx(4), 0, dpToPx(8))
+                }
+                layoutParams = dParams
+            }
+            expandedLayout.addView(divider)
+
+            // Status Indicator Row
+            val statusRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dpToPx(6))
+            }
+            val statusLabel = TextView(this).apply {
+                text = "مراقبة الحافظة:"
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 11f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            statusRow.addView(statusLabel)
+
+            val indicatorContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            statusCircle = View(this).apply {
+                background = createCircleDrawable("#10B981")
+                val cParams = LinearLayout.LayoutParams(dpToPx(8), dpToPx(8)).apply {
+                    setMargins(0, 0, dpToPx(6), 0)
+                }
+                layoutParams = cParams
+            }
+            indicatorContainer.addView(statusCircle)
+
+            statusTxt = TextView(this).apply {
+                text = "نشط"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            indicatorContainer.addView(statusTxt)
+            statusRow.addView(indicatorContainer)
+            expandedLayout.addView(statusRow)
+
+            // Last Event message bubble
+            lastActionTxt = TextView(this).apply {
+                text = "آخر إجراء: لا توجد عمليات حالية"
+                setTextColor(Color.parseColor("#CBD5E1"))
+                textSize = 9.5f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                background = createRoundedDrawable("#0F0F1E", 4f)
+                setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+                val laParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, dpToPx(4), 0, dpToPx(10))
+                }
+                layoutParams = laParams
+            }
+            expandedLayout.addView(lastActionTxt)
+
+            // Central button to process Clipboard immediately manually
+            val triggerBtn = Button(this).apply {
+                text = "⚡ معالجة الحافظة الآن"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                background = createRoundedDrawable("#D97706", 8f)
+                setOnClickListener {
+                    manualCollectClipboard()
+                }
+                val tbParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
+                    setMargins(0, 0, 0, dpToPx(8))
+                }
+                layoutParams = tbParams
+            }
+            expandedLayout.addView(triggerBtn)
+
+            // Actions panel buttons Row (Toggle pause, stop entire service)
+            val actionsRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+
+            toggleStatusBtn = Button(this).apply {
+                textSize = 9.5f
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#475569", 6f)
+                setOnClickListener {
+                    toggleMonitoringPause()
+                    updateStatusUI()
+                }
+                val tsParams = LinearLayout.LayoutParams(0, dpToPx(30), 1f).apply {
+                    setMargins(0, 0, dpToPx(4), 0)
+                }
+                layoutParams = tsParams
+            }
+            actionsRow.addView(toggleStatusBtn)
+
+            val appLauncherBtn = Button(this).apply {
+                text = "الرئيسية"
+                textSize = 9.5f
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#475569", 6f)
+                setOnClickListener {
+                    launchMainApp()
+                }
+                val alParams = LinearLayout.LayoutParams(0, dpToPx(30), 1f).apply {
+                    setMargins(0, 0, dpToPx(4), 0)
+                }
+                layoutParams = alParams
+            }
+            actionsRow.addView(appLauncherBtn)
+
+            val killServiceBtn = Button(this).apply {
+                text = "إغلاق"
+                textSize = 9.5f
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#991B1B", 6f)
+                setOnClickListener {
+                    removeGoldenView()
+                    stopSelf()
+                }
+                val ksParams = LinearLayout.LayoutParams(0, dpToPx(30), 1f)
+                layoutParams = ksParams
+            }
+            actionsRow.addView(killServiceBtn)
+            expandedLayout.addView(actionsRow)
+
+            val cardParams = FrameLayout.LayoutParams(dpToPx(270), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER
+            }
+            root.addView(expandedLayout, cardParams)
+
+            // Touch Dragging Logic
+            var initialX = 0
+            var initialY = 0
+            var initialTouchX = 0f
+            var initialTouchY = 0f
+            var isMoving = false
+
+            val touchDragListener = View.OnTouchListener { view, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = params.x
+                        initialY = params.y
+                        initialTouchX = event.rawX
+                        initialTouchY = event.rawY
+                        isMoving = false
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - initialTouchX
+                        val dy = event.rawY - initialTouchY
+                        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                            isMoving = true
+                        }
+                        params.x = initialX + dx.toInt()
+                        params.y = initialY + dy.toInt()
+                        try {
+                            windowManager.updateViewLayout(root, params)
+                        } catch (e: Exception) {}
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if (!isMoving) {
+                            view.performClick()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            collapsedLayout.setOnTouchListener(touchDragListener)
+            collapsedLayout.setOnClickListener {
+                collapsedLayout.visibility = View.GONE
+                expandedLayout.visibility = View.VISIBLE
+            }
+
+            header.setOnTouchListener(touchDragListener)
+
+            // Initialize UI elements states
+            updateStatusUI()
+
+            rootLayout = root
+            windowManager.addView(root, params)
+
+        } catch (e: Exception) {
+            Log.e("GoldenBubbleService", "Error building golden bubble overlay: ${e.message}", e)
+            Toast.makeText(applicationContext, "فشل تشغيل الكرة الذهبية: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+            removeGoldenView()
+            stopSelf()
+        }
+    }
+
+    private fun manualCollectClipboard() {
+        try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (clipboard.hasPrimaryClip()) {
+                val clipData = clipboard.primaryClip
+                if (clipData != null && clipData.itemCount > 0) {
+                    val text = clipData.getItemAt(0).text?.toString() ?: ""
+                    if (text.isNotBlank()) {
+                        Toast.makeText(applicationContext, "🔄 جاري معالجة النص يدوياً...", Toast.LENGTH_SHORT).show()
+                        processClipboardContent(text)
+                    } else {
+                        Toast.makeText(applicationContext, "الحافظة فارغة بالكامل.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                Toast.makeText(applicationContext, "لا يوجد نص منسوخ في الحافظة.", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(applicationContext, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun toggleMonitoringPause() {
+        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val current = sharedPrefs.getBoolean("clipboard_is_paused", false)
+        sharedPrefs.edit().putBoolean("clipboard_is_paused", !current).apply()
+
+        val toastMsg = if (!current) "تم الإيقاف المؤقت للمراقبة." else "تم استئناف المراقبة بنشاط."
+        Toast.makeText(applicationContext, toastMsg, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun launchMainApp() {
+        try {
+            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(applicationContext, "تعذر تشغيل التطبيق: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun removeGoldenView() {
+        rootLayout?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (e: Exception) {}
+            rootLayout = null
+        }
+    }
+
+    private fun getBaseDir(): File {
+        val path = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getString("base_dir_path", null)
+        if (!path.isNullOrBlank()) {
+            return File(path).also { it.mkdirs() }
+        }
+        return if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
+            File(getExternalFilesDir(null), "SmartPlatform")
+        } else {
+            File(filesDir, "SmartPlatform")
+        }.also { it.mkdirs() }
+    }
+
+    override fun onDestroy() {
+        removeGoldenView()
+        handler.removeCallbacks(clipboardRunnable)
+        isPollingActive = false
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+}
