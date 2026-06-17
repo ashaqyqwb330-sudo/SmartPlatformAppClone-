@@ -43,6 +43,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _autoProcessClipboard = MutableStateFlow(true)
     val autoProcessClipboard: StateFlow<Boolean> = _autoProcessClipboard.asStateFlow()
 
+    private val _clearClipAfterSave = MutableStateFlow(false)
+    val clearClipAfterSave: StateFlow<Boolean> = _clearClipAfterSave.asStateFlow()
+
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "clipboard_is_paused") {
             val isPaused = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
@@ -50,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else if (key == "auto_process_clipboard") {
             val isAutoVal = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("auto_process_clipboard", true)
             _autoProcessClipboard.value = isAutoVal
+        } else if (key == "clear_clip_after_save") {
+            val isClearVal = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clear_clip_after_save", false)
+            _clearClipAfterSave.value = isClearVal
         }
     }
 
@@ -80,6 +86,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener(prefsListener)
         _isServicePaused.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
         _autoProcessClipboard.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("auto_process_clipboard", true)
+        _clearClipAfterSave.value = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clear_clip_after_save", false)
     }
 
     private fun loadSettings() {
@@ -89,6 +96,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefixTreedoc.value = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
         baseDirSetting.value = sharedPrefs.getString("base_dir_path", getBaseDir().absolutePath) ?: getBaseDir().absolutePath
         _autoProcessClipboard.value = sharedPrefs.getBoolean("auto_process_clipboard", true)
+        _clearClipAfterSave.value = sharedPrefs.getBoolean("clear_clip_after_save", false)
     }
 
     fun savePrefixes(builder: String, executor: String, treedoc: String) {
@@ -121,6 +129,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _autoProcessClipboard.value = enabled
         context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).edit().putBoolean("auto_process_clipboard", enabled).apply()
         insertSystemLog("تحديث معالجة الحافظة", "تم ضبط ميزة المعالجة التلقائية للحافظة إلى: ${if (enabled) "مفعّل" else "ملغى"}")
+    }
+
+    fun setClearClipAfterSave(enabled: Boolean) {
+        _clearClipAfterSave.value = enabled
+        context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).edit().putBoolean("clear_clip_after_save", enabled).apply()
+        insertSystemLog("تحديث مسح الحافظة", "تم ضبط خيار مسح الحافظة بعد الحفظ التلقائي إلى: ${if (enabled) "مفعّل" else "ملغى"}")
     }
 
     fun checkServiceStatus() {
@@ -367,23 +381,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigateToDir(directory: File) {
-        if (directory.isDirectory && directory.exists()) {
-            _currentBrowserPath.value = directory
-            val files = directory.listFiles()?.filter {
-                !it.name.startsWith(".") && it.name != "tree_report.txt" && it.name != "tree_report.json"
-            }?.sortedWith(compareBy({ !it.isDirectory }, { it.name })) ?: emptyList()
-            _browserFilesList.value = files
+        var target = directory
+        if (target.absolutePath == "/") {
+            target = File("/storage/emulated/0")
         }
+        if (!target.exists()) {
+            try {
+                target.mkdirs()
+            } catch (e: Exception) {}
+        }
+        if (!target.exists() || !target.isDirectory) {
+            target = File("/storage/emulated/0")
+        }
+        _currentBrowserPath.value = target
+        val files = target.listFiles()?.filter {
+            !it.name.startsWith(".") && it.name != "tree_report.txt" && it.name != "tree_report.json"
+        }?.sortedWith(compareBy({ !it.isDirectory }, { it.name })) ?: emptyList()
+        _browserFilesList.value = files
     }
 
     fun navigateUp() {
         val current = _currentBrowserPath.value ?: return
-        val baseLimit = File(baseDirSetting.value)
-        
-        // Prevent navigating above baseDir for safety boundaries, or let user explore
         val parent = current.parentFile
-        if (parent != null && current.absolutePath != baseLimit.absolutePath) {
-            navigateToDir(parent)
+        if (parent != null) {
+            val resolvedParent = if (parent.absolutePath == "/") File("/storage/emulated/0") else parent
+            navigateToDir(resolvedParent)
         }
     }
 

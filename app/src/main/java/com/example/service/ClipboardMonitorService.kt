@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.db.AppDatabase
@@ -137,20 +138,41 @@ class ClipboardMonitorService : Service() {
         if (clipData.itemCount == 0) return
         val text = clipData.getItemAt(0).text?.toString() ?: return
 
+        if (text.isBlank()) return
+
         val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
         val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
         val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
 
-        if (text.isNotBlank() && (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:"))) {
-            val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
-            if (text != lastProcessed) {
+        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
+        if (text == lastProcessed) return
+
+        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:")) {
+            processCopiedText(text)
+        } else {
+            // No saved directives found. Only show Toast if text is long enough (e.g. >= 8 chars) to avoid spamming tiny copy-paste
+            if (text.trim().length >= 8) {
                 sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
-                processCopiedText(text)
+                serviceScope.launch(Dispatchers.Main) {
+                    try {
+                        Toast.makeText(applicationContext, "⚠️ نص منسوخ لا يحتوي على توجيهات حفظ؛ لم يتم الحفظ تلقائياً.", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {}
+                }
+                logSystemEvent("تجاوز النسخ (لا توجد توجيهات)", "تم تجاوز الحفظ لعدم العثور على بادئات نشطة في النص المنسوخ.")
+                updateNotification("مراقب الحافظة يعمل بنجاح", "جاهز - تم تجاوز حفظ آخر نص منسوخ لعدم وجود توجيهات صالحة.")
             }
         }
     }
 
     private fun processCopiedText(text: String) {
+        val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
+        if (text == lastProcessed && text.isNotBlank()) {
+            return
+        }
+        // Save to preferences immediately on first ENTRY to prevent any concurrency loops
+        sharedPrefs.edit().putString("last_auto_processed_text", text).apply()
+
         serviceScope.launch {
             logSystemEvent("توجيه مكتشف", "تم التقاط محتويات الحافظة. بدء المعالجة الذكية...")
             updateNotification("معالجة التوجيهات...", "يرجى الانتظار، يجري معالجة الملفات والتعليمات.")
@@ -219,6 +241,23 @@ class ClipboardMonitorService : Service() {
                 val summary = "تم بنجاح: $buildersCount ملفات، $executorsCount أوامر، $treedocCount تقارير شجرية."
                 logSystemEvent("نجاح المعالجة الكاملة", summary)
                 updateNotification("نجحت المعالجة الذكية", summary)
+
+                // Clear clipboard securely if selected
+                val clearClip = sharedPrefs.getBoolean("clear_clip_after_save", false)
+                if (clearClip) {
+                    withContext(Dispatchers.Main) {
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                clipboardManager.clearPrimaryClip()
+                            } else {
+                                clipboardManager.setPrimaryClip(ClipData.newPlainText("", ""))
+                            }
+                            Toast.makeText(applicationContext, "🧹 تم مسح وتفريغ الحافظة تلقائياً بنجاح لمنع التكرار وحماية الخصوصية.", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error clearing clipboard: ${e.message}")
+                        }
+                    }
+                }
 
             } catch (e: Exception) {
                 logSystemEvent("خطأ في المعالجة", "فشل المحرك في معالجة النص: ${e.message}")

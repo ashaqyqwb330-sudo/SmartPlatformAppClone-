@@ -1158,7 +1158,9 @@ fun TreeDocScreen(viewModel: MainViewModel) {
 
                         Button(
                             onClick = {
-                                viewModel.navigateToBaseDir()
+                                val resolvedPath = if (chosenFolder == "/") "/storage/emulated/0" else chosenFolder
+                                val enteredFile = File(resolvedPath.ifBlank { viewModel.baseDirSetting.value })
+                                viewModel.navigateToDir(enteredFile)
                                 showDirectoryChooser = true
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
@@ -1322,12 +1324,40 @@ fun TreeDocScreen(viewModel: MainViewModel) {
 
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "المسار الحالي: ${browserCurrentPath.name.ifBlank { "SmartPlatform" }}",
+                        text = "المسار الحالي: ${browserCurrentPath.absolutePath}",
                         color = TextGray,
-                        fontSize = 11.sp,
-                        maxLines = 1,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        lineHeight = 14.sp,
                         overflow = TextOverflow.Ellipsis
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val memoryShortcuts = listOf(
+                            Pair("الرئيسية", "/storage/emulated/0"),
+                            Pair("المستندات", "/storage/emulated/0/Documents"),
+                            Pair("التنزيلات", "/storage/emulated/0/Download"),
+                            Pair("مجلد المشاريع", File(viewModel.baseDirSetting.value).absolutePath)
+                        )
+                        memoryShortcuts.forEach { (label, pStr) ->
+                            Button(
+                                onClick = { viewModel.navigateToDir(File(pStr)) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (browserCurrentPath.absolutePath == pStr) MetallicGold else GoldGlassBg,
+                                    contentColor = if (browserCurrentPath.absolutePath == pStr) SlateBg else TextSilver
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(label, fontSize = 9.sp)
+                            }
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -2031,6 +2061,37 @@ fun SettingsScreen(
             }
         }
 
+        // Clear Clipboard Option Tag Toggle
+        item {
+            val clearClipEnabled = viewModel.clearClipAfterSave.collectAsState().value
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("مسح الحافظة بعد الحفظ التلقائي", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("حذف محتوى الحافظة تلقائياً بعد معالجتها وحفظها بنجاح لمنع التكرار وحماية خصوصية بياناتك", color = TextGray, fontSize = 10.sp)
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Switch(
+                        checked = clearClipEnabled,
+                        onCheckedChange = { viewModel.setClearClipAfterSave(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = SlateBg,
+                            checkedTrackColor = MetallicGold,
+                            uncheckedThumbColor = TextGray,
+                            uncheckedTrackColor = GlassWhite
+                        ),
+                        modifier = Modifier.testTag("clear_clip_after_save_switch")
+                    )
+                }
+            }
+        }
+
         // Custom Gemini API key card
         item {
             GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -2332,7 +2393,16 @@ fun DirectoryBrowserDialog(
                     
                     Button(
                         onClick = {
-                            onConfirm(currentPath.absolutePath)
+                            val targetPath = pathInputText.trim().ifBlank { currentPath.absolutePath }
+                            val resolvedFile = if (targetPath == "/") File("/storage/emulated/0") else File(targetPath)
+                            try {
+                                resolvedFile.mkdirs()
+                            } catch (e: Exception) {}
+                            if (resolvedFile.exists()) {
+                                onConfirm(resolvedFile.absolutePath)
+                            } else {
+                                onConfirm(currentPath.absolutePath)
+                            }
                             onDismiss()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
