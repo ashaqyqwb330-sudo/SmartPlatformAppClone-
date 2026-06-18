@@ -518,11 +518,61 @@ class BuilderEngine(
                 }
                 command.startsWith("open ") -> {
                     val target = command.removePrefix("open ").trim()
-                    val file = File(target)
+                    val file = if (File(target).isAbsolute) File(target) else File(getBaseDirForPrefix("@builder"), target)
                     if (file.exists()) {
-                        "✅ [EXEC] فتح: $target"
+                        try {
+                            val authority = "${context.packageName}.fileprovider"
+                            val uri = FileProvider.getUriForFile(context, authority, file)
+                            val mimeType = context.contentResolver.getType(uri) ?: getMimeType(file)
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, mimeType)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                            "✅ [EXEC] تم فتح الملف: ${file.name}"
+                        } catch (e: Exception) {
+                            "❌ [EXEC] فشل فتح الملف ${file.name}: ${e.message}"
+                        }
                     } else {
-                        "⚠️ [EXEC] المسار غير موجود: $target"
+                        "⚠️ [EXEC] الملف غير موجود: ${file.absolutePath}"
+                    }
+                }
+                command.startsWith("copy ") -> {
+                    val target = command.removePrefix("copy ").trim()
+                    val file = if (File(target).isAbsolute) File(target) else File(getBaseDirForPrefix("@builder"), target)
+                    if (file.exists() && file.isFile) {
+                        try {
+                            val content = file.readText(Charsets.UTF_8)
+                            withContext(Dispatchers.Main) {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText(file.name, content))
+                            }
+                            "✅ [EXEC] تم نسخ محتوى الملف (${file.name}) إلى الحافظة بنجاح."
+                        } catch (e: Exception) {
+                            "❌ [EXEC] فشل قراءة الملف: ${e.message}"
+                        }
+                    } else {
+                        "⚠️ [EXEC] الملف غير موجود أو ليس ملفاً صالحاً: ${file.absolutePath}"
+                    }
+                }
+                command.startsWith("delete ") -> {
+                    val target = command.removePrefix("delete ").trim()
+                    val file = if (File(target).isAbsolute) File(target) else File(getBaseDirForPrefix("@builder"), target)
+                    if (file.exists()) {
+                        val isDir = file.isDirectory
+                        try {
+                            val deleted = file.deleteRecursively()
+                            if (deleted) {
+                                "✅ [EXEC] تم حذف ${if (isDir) "المجلد" else "الملف"} بنجاح: ${file.name}"
+                            } else {
+                                "❌ [EXEC] فشل حذف: ${file.name}"
+                            }
+                        } catch (e: Exception) {
+                            "❌ [EXEC] فشل أثناء الحذف: ${e.message}"
+                        }
+                    } else {
+                        "⚠️ [EXEC] المسار غير موجود للحذف: ${file.absolutePath}"
                     }
                 }
                 else -> "⚠️ [EXEC] أمر غير معروف: $command"
@@ -530,6 +580,11 @@ class BuilderEngine(
         } catch (e: Exception) {
             "❌ [EXEC] فشل: ${e.message}"
         }
+    }
+
+    private fun getMimeType(file: File): String {
+        val extension = file.extension.lowercase(java.util.Locale.ROOT)
+        return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
     }
 
     // =====================================================================

@@ -23,6 +23,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import com.example.db.AppDatabase
 import com.example.db.FileEntity
 import com.example.db.LogEntity
@@ -49,6 +50,8 @@ class BuilderIME : InputMethodService() {
     private var isPollingActive = false
     private val handler = Handler(Looper.getMainLooper())
     private var statusTextView: TextView? = null
+    private var rootLayout: LinearLayout? = null
+    private var isExplorerMode = false
 
     private val isPaused: Boolean
         get() {
@@ -135,74 +138,18 @@ class BuilderIME : InputMethodService() {
 
     override fun onCreateInputView(): View {
         val context = this
-        val layout = LinearLayout(context).apply {
+        rootLayout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#0F172A")) // DeepNavyBG
-            val pad = dpToPx(16, context)
+            setBackgroundColor(Color.parseColor("#0B0F19")) // Elegant SuperDark Navy BG
+            val pad = dpToPx(12, context)
             setPadding(pad, pad, pad, pad)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                dpToPx(280, context) // Lock the keyboard height to standard 280dp
             )
         }
 
-        // Title text header
-        val headerText = TextView(context).apply {
-            text = "لوحة تحكم المنصة الذكية"
-            setTextColor(Color.parseColor("#F59E0B")) // BrightGold
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dpToPx(6, context))
-        }
-        layout.addView(headerText)
-
-        // Status text showing active monitoring
-        statusTextView = TextView(context).apply {
-            text = getStatusString()
-            setTextColor(Color.parseColor("#E2E8F0")) // SoftSilver
-            textSize = 13f
-            setLineSpacing(1.2f, 1.2f)
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dpToPx(16, context))
-        }
-        layout.addView(statusTextView)
-
-        // Force scan clipboard button
-        val scanBtn = Button(context).apply {
-            text = "⚡ مسح ومعالجة الحافظة الحالية الآن"
-            setTextColor(Color.WHITE)
-            background = createButtonDrawable("#D97706") // MetallicGold
-            textSize = 13f
-            setPadding(dpToPx(12, context), dpToPx(10, context), dpToPx(12, context), dpToPx(10, context))
-            setOnClickListener {
-                forceScanClipboardManual()
-            }
-        }
-        val scanParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dpToPx(46, context)
-        ).apply {
-            bottomMargin = dpToPx(12, context)
-        }
-        layout.addView(scanBtn, scanParams)
-
-        // Switch to last typing method button
-        val switchBtn = Button(context).apply {
-            text = "🔄 التبديل للوحة المفاتيح السابقة"
-            setTextColor(Color.parseColor("#F59E0B")) // BrightGold
-            background = createButtonDrawable("#1E293B") // SlateSurface
-            textSize = 13f
-            setPadding(dpToPx(12, context), dpToPx(10, context), dpToPx(12, context), dpToPx(10, context))
-            setOnClickListener {
-                switchBackToPreviousIME()
-            }
-        }
-        val switchParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dpToPx(46, context)
-        )
-        layout.addView(switchBtn, switchParams)
+        rebuildIMEUI(context)
 
         // Make sure clipboard manager is ready
         try {
@@ -212,7 +159,439 @@ class BuilderIME : InputMethodService() {
             Log.e(TAG, "Error initializing ClipboardManager in onCreateInputView: ${e.message}")
         }
 
-        return layout
+        return rootLayout!!
+    }
+
+    private fun rebuildIMEUI(context: Context) {
+        val layout = rootLayout ?: return
+        layout.removeAllViews()
+
+        if (isExplorerMode) {
+            buildExplorerUI(context, layout)
+        } else {
+            buildDashboardUI(context, layout)
+        }
+    }
+
+    private fun buildDashboardUI(context: Context, layout: LinearLayout) {
+        // 1. Header Row
+        val headerText = TextView(context).apply {
+            text = "💻 بيئة التطوير المصغرة (المنصة الذكية)"
+            setTextColor(Color.parseColor("#F59E0B")) // BrightGold
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dpToPx(4, context))
+        }
+        layout.addView(headerText)
+
+        // Project path description
+        val pathText = TextView(context).apply {
+            text = "مسار المشروع الافتراضي: SmartPlatform/"
+            setTextColor(Color.parseColor("#64748B"))
+            textSize = 10f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dpToPx(8, context))
+        }
+        layout.addView(pathText)
+
+        // 2. Monitoring Status
+        statusTextView = TextView(context).apply {
+            text = getStatusString()
+            setTextColor(Color.parseColor("#E2E8F0"))
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dpToPx(12, context))
+        }
+        layout.addView(statusTextView)
+
+        // 3. Status Stats Badge Row (Files count + active services)
+        val statsLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dpToPx(12, context))
+        }
+        
+        val filesCount = getPhysicalFilesCount()
+        val statsTxt = TextView(context).apply {
+            text = "📊 عدد الملفات النشطة بالقرص: $filesCount ملف"
+            setTextColor(Color.parseColor("#F59E0B"))
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dpToPx(10, context), dpToPx(6, context), dpToPx(10, context), dpToPx(6, context))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1E293B"))
+                cornerRadius = dpToPx(6, context).toFloat()
+            }
+        }
+        statsLayout.addView(statsTxt)
+        layout.addView(statsLayout)
+
+        // 4. Action Buttons Container
+        val actionContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = lp
+        }
+
+        // Left button: Open project explorer file list
+        val expBtn = Button(context).apply {
+            text = "📂 مستكشف شجرة المشروع"
+            setTextColor(Color.WHITE)
+            background = createButtonDrawable("#D97706") // Accent gold / orange
+            textSize = 11f
+            setOnClickListener {
+                isExplorerMode = true
+                rebuildIMEUI(context)
+            }
+            val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                rightMargin = dpToPx(6, context)
+            }
+            layoutParams = params
+        }
+        actionContainer.addView(expBtn)
+
+        // Right button: Process clipboard manually
+        val scanBtn = Button(context).apply {
+            text = "⚡ معالجة الحافظة الآن"
+            setTextColor(Color.WHITE)
+            background = createButtonDrawable("#3B82F6") // Blue accent
+            textSize = 11f
+            setOnClickListener {
+                forceScanClipboardManual()
+            }
+            val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                leftMargin = dpToPx(6, context)
+            }
+            layoutParams = params
+        }
+        actionContainer.addView(scanBtn)
+        layout.addView(actionContainer)
+
+        // 5. Back Navigation Button / Switch Keyboard Row
+        val navigationRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(38, context)).apply {
+                topMargin = dpToPx(10, context)
+            }
+            layoutParams = lp
+        }
+
+        val refreshBtn = Button(context).apply {
+            text = "🔄 تحديث الإحصائيات"
+            setTextColor(Color.parseColor("#94A3B8"))
+            background = createButtonDrawable("#1E293B")
+            textSize = 10f
+            setOnClickListener {
+                Toast.makeText(applicationContext, "🔄 تم تحديث إحصائيات المشروع والعداد بنجاح!", Toast.LENGTH_SHORT).show()
+                rebuildIMEUI(context)
+            }
+            val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                rightMargin = dpToPx(6, context)
+            }
+            layoutParams = params
+        }
+        navigationRow.addView(refreshBtn)
+
+        val switchBtn = Button(context).apply {
+            text = "🔄 التبديل للكيبورد السابق"
+            setTextColor(Color.parseColor("#F59E0B"))
+            background = createButtonDrawable("#1E293B")
+            textSize = 10f
+            setOnClickListener {
+                switchBackToPreviousIME()
+            }
+            val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                leftMargin = dpToPx(6, context)
+            }
+            layoutParams = params
+        }
+        navigationRow.addView(switchBtn)
+        layout.addView(navigationRow)
+    }
+
+    private fun buildExplorerUI(context: Context, layout: LinearLayout) {
+        // 1. Header Toolbar
+        val toolbar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dpToPx(6, context))
+        }
+
+        // Back button to Dashboard
+        val backBtn = TextView(context).apply {
+            text = "⬅️ العودة"
+            setTextColor(Color.parseColor("#F59E0B"))
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dpToPx(8, context), dpToPx(4, context), dpToPx(8, context), dpToPx(4, context))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1E293B"))
+                cornerRadius = dpToPx(4, context).toFloat()
+            }
+            setOnClickListener {
+                isExplorerMode = false
+                rebuildIMEUI(context)
+            }
+        }
+        toolbar.addView(backBtn)
+
+        val spacer = TextView(context).apply {
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = lp
+        }
+        toolbar.addView(spacer)
+
+        val titleText = TextView(context).apply {
+            text = "📂 مستكشف شجرة الملفات"
+            setTextColor(Color.parseColor("#F1F5F9"))
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        toolbar.addView(titleText)
+
+        val spacer2 = TextView(context).apply {
+            val lp = LinearLayout.LayoutParams(dpToPx(8, context), ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = lp
+        }
+        toolbar.addView(spacer2)
+
+        val rfrBtn = TextView(context).apply {
+            text = "🔄 تحديث"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dpToPx(8, context), dpToPx(4, context), dpToPx(8, context), dpToPx(4, context))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1E293B"))
+                cornerRadius = dpToPx(4, context).toFloat()
+            }
+            setOnClickListener {
+                Toast.makeText(applicationContext, "🔄 جاري إعادة مسح مجلد المشروع...", Toast.LENGTH_SHORT).show()
+                rebuildIMEUI(context)
+            }
+        }
+        toolbar.addView(rfrBtn)
+        layout.addView(toolbar)
+
+        // Project path breadcrumb
+        val breadcrumbText = TextView(context).apply {
+            text = "المسار الحالي: SmartPlatform/"
+            setTextColor(Color.parseColor("#64748B"))
+            textSize = 9f
+            setPadding(0, 0, 0, dpToPx(4, context))
+        }
+        layout.addView(breadcrumbText)
+
+        // 2. Scrollable File Tree Container
+        val scrollView = android.widget.ScrollView(context).apply {
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = lp
+            isVerticalScrollBarEnabled = true
+        }
+
+        val scrollContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Add file rows to scrollContainer
+        addExplorerFilesToLayout(context, scrollContainer)
+
+        scrollView.addView(scrollContainer)
+        layout.addView(scrollView)
+    }
+
+    private fun addExplorerFilesToLayout(context: Context, container: LinearLayout) {
+        val base = getBaseDir()
+        if (!base.exists() || !base.isDirectory) {
+            val noFileTxt = TextView(context).apply {
+                text = "المجلد الرئيسي للمشروع فارغ أو غير موجود."
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(0, dpToPx(24, context), 0, dpToPx(24, context))
+            }
+            container.addView(noFileTxt)
+            return
+        }
+
+        val filesList = mutableListOf<File>()
+        base.walkTopDown().forEach { file ->
+            if (file.absolutePath == base.absolutePath) return@forEach
+            val relativePath = file.relativeTo(base).path
+            val parts = relativePath.split(File.separator)
+            if (parts.none { it in BuilderEngine.IGNORE_DIRS }) {
+                filesList.add(file)
+            }
+        }
+        
+        // Sort directories first, then files alphabetically
+        filesList.sortWith(compareBy({ !it.isDirectory }, { it.name.lowercase(java.util.Locale.ROOT) }))
+
+        if (filesList.isEmpty()) {
+            val noFileTxt = TextView(context).apply {
+                text = "لا توجد ملفات نشطة في المستكشف حالياً."
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(0, dpToPx(24, context), 0, dpToPx(24, context))
+            }
+            container.addView(noFileTxt)
+            return
+        }
+
+        for (file in filesList) {
+            val itemPath = file.relativeTo(base).path
+            val isDirectory = file.isDirectory
+            
+            // Count nesting level
+            val nestingLevel = itemPath.count { it == File.separatorChar }
+
+            val itemLayout = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dpToPx(8, context) + (nestingLevel * dpToPx(8, context)), dpToPx(6, context), dpToPx(8, context), dpToPx(6, context))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#111827")) // Gray 900
+                    cornerRadius = dpToPx(4, context).toFloat()
+                }
+                val lp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dpToPx(4, context)
+                }
+                layoutParams = lp
+            }
+
+            // Icon + Name
+            val nameTxt = TextView(context).apply {
+                val icon = if (isDirectory) "📁 " else "📄 "
+                text = "$icon${file.name}"
+                setTextColor(if (isDirectory) Color.parseColor("#F59E0B") else Color.parseColor("#F1F5F9"))
+                textSize = 11f
+                typeface = if (isDirectory) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = lp
+            }
+            itemLayout.addView(nameTxt)
+
+            if (!isDirectory) {
+                // File size display
+                val sizeKb = file.length() / 1024.0
+                val sizeStr = String.format(java.util.Locale.US, "%.1f KB", sizeKb)
+                val sizeTxt = TextView(context).apply {
+                    text = sizeStr
+                    setTextColor(Color.parseColor("#94A3B8"))
+                    textSize = 9f
+                    setPadding(0, 0, dpToPx(6, context), 0)
+                }
+                itemLayout.addView(sizeTxt)
+
+                // Open button
+                val openBtn = TextView(context).apply {
+                    text = "👁️ فتح"
+                    setTextColor(Color.parseColor("#10B981")) // EmeraldGreen
+                    textSize = 10f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(dpToPx(6, context), dpToPx(4, context), dpToPx(6, context), dpToPx(4, context))
+                    setOnClickListener {
+                        openFileWithProvider(file)
+                    }
+                }
+                itemLayout.addView(openBtn)
+
+                // Copy button
+                val copyBtn = TextView(context).apply {
+                    text = "📋 نسخ"
+                    setTextColor(Color.parseColor("#3B82F6")) // Blue
+                    textSize = 10f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(dpToPx(6, context), dpToPx(4, context), dpToPx(6, context), dpToPx(4, context))
+                    setOnClickListener {
+                        try {
+                            val text = file.readText(Charsets.UTF_8)
+                            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText(file.name, text))
+                            Toast.makeText(applicationContext, "تم نسخ محتوى ${file.name} إلى الحافظة!", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(applicationContext, "فشل نسخ الملف: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                itemLayout.addView(copyBtn)
+            }
+
+            // Delete button
+            val delBtn = TextView(context).apply {
+                text = "🗑️"
+                setTextColor(Color.parseColor("#EF4444")) // Red
+                textSize = 11f
+                setPadding(dpToPx(6, context), dpToPx(4, context), dpToPx(6, context), dpToPx(4, context))
+                setOnClickListener {
+                    val typeStr = if (isDirectory) "المجلد" else "الملف"
+                    try {
+                        val success = file.deleteRecursively()
+                        if (success) {
+                            Toast.makeText(applicationContext, "تم حذف $typeStr ${file.name} بنجاح!", Toast.LENGTH_SHORT).show()
+                            rebuildIMEUI(context)
+                        } else {
+                            Toast.makeText(applicationContext, "فشل حذف $typeStr.", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(applicationContext, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            itemLayout.addView(delBtn)
+
+            container.addView(itemLayout)
+        }
+    }
+
+    private fun openFileWithProvider(file: File) {
+        if (!file.exists()) {
+            Toast.makeText(applicationContext, "الملف غير موجود.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val authority = "$packageName.fileprovider"
+            val uri = FileProvider.getUriForFile(this, authority, file)
+            val extension = file.extension.lowercase(java.util.Locale.ROOT)
+            val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+            
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Toast.makeText(applicationContext, "جاري فتح الملف: ${file.name}", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(applicationContext, "فشل تشغيل المعالج الافتراضي: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun getPhysicalFilesCount(): Int {
+        val base = getBaseDir()
+        if (!base.exists()) return 0
+        var count = 0
+        try {
+            base.walkTopDown().forEach { file ->
+                if (file.isFile) {
+                    val relativePath = file.relativeTo(base).path
+                    val parts = relativePath.split(File.separator)
+                    if (parts.none { it in BuilderEngine.IGNORE_DIRS }) {
+                        count++
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error counting physical files: ${e.message}")
+        }
+        return count
     }
 
     private fun dpToPx(dp: Int, context: Context): Int {
