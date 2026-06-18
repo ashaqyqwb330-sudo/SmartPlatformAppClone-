@@ -8,6 +8,9 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -455,10 +458,32 @@ class BuilderEngine(
         // 2. تنفيذ @executor
         if (hasExecutor) {
             log("⚡ اكتشاف توجيهات @executor...")
-            for (line in lines) {
-                val cmd = extractExecutorCommand(line, ePrefixes) ?: continue
-                val resMsg = executeDirective(cmd, ePrefixes)
-                results.add(ProcessResult("executor", resMsg, mapOf("command" to cmd)))
+            val eLines = lines.mapNotNull { extractExecutorCommand(it, ePrefixes) }
+            val totalCmds = eLines.size
+            if (totalCmds > 0) {
+                var successCount = 0
+                var failCount = 0
+                val failReasons = mutableListOf<String>()
+
+                for (cmd in eLines) {
+                    val resMsg = executeDirective(cmd, ePrefixes)
+                    val isFail = resMsg.contains("❌") || resMsg.contains("فشل")
+                    if (isFail) {
+                        failCount++
+                        val cleanMsg = resMsg.removePrefix("❌").replace(Regex("\\[EXEC\\]\\s*"), "").trim()
+                        failReasons.add(cleanMsg)
+                    } else {
+                        successCount++
+                    }
+                    results.add(ProcessResult("executor", resMsg, mapOf("command" to cmd)))
+                }
+
+                val notificationMsg = if (failCount > 0) {
+                    "تم تنفيذ $successCount/$totalCmds أوامر. $failCount فشل: ${failReasons.joinToString("، ")}"
+                } else {
+                    "تم تنفيذ $totalCmds/$totalCmds أوامر بنجاح."
+                }
+                showSystemNotification(notificationMsg)
             }
         }
 
@@ -466,9 +491,12 @@ class BuilderEngine(
         if (hasTreedoc) {
             log("📂 اكتشاف توجيهات @treedoc...")
             for (line in lines) {
-                val treedocCmd = extractTreedocCommand(line, tPrefixes) ?: continue
-                val (folder, fmt, clip) = treedocCmd
-                val (msg, data) = runTreedoc(folder, fmt, clip)
+                val matchedPrefix = tPrefixes.firstOrNull { line.trim().startsWith("$it:report") || line.trim().startsWith("$it:scan") } ?: continue
+                val isScan = line.trim().startsWith("$matchedPrefix:scan")
+                val cmdType = if (isScan) "scan" else "report"
+                val prefixString = if (isScan) "$matchedPrefix:scan" else "$matchedPrefix:report"
+                val remainder = line.trim().removePrefix(prefixString).trim()
+                val (msg, data) = runTreedocNew(remainder, cmdType)
                 results.add(ProcessResult("treedoc", msg, data))
             }
         }
@@ -503,6 +531,39 @@ class BuilderEngine(
      */
     suspend fun executeDirective(command: String, prefixes: List<String>? = null): String = withContext(Dispatchers.IO) {
         try {
+            val trimmedCmd = command.trim()
+            val parts = trimmedCmd.split(Regex("\\s+"), 2)
+            val firstWord = parts[0]
+            val paramRemainder = if (parts.size > 1) parts[1] else ""
+
+            val registeredCmd = CommandRegistry.getCommand(firstWord)
+            if (registeredCmd != null) {
+                val (parsedArgs, parsedFlags) = CommandRegistry.parseArgsAndFlags(paramRemainder)
+                val base = getBaseDirForPrefix("@builder")
+                val cmdContext = CommandContext(
+                    context = context,
+                    baseDir = base,
+                    args = parsedArgs,
+                    flags = parsedFlags
+                )
+
+                val isDryRun = parsedFlags.contains("dry-run") || parsedArgs["dry-run"] == "true" || parsedArgs["dryRun"] == "true"
+                if (isDryRun) {
+                    val dryMsg = registeredCmd.dryRun(cmdContext)
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, dryMsg, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                    return@withContext "🛡️ [Dry-Run] $dryMsg"
+                }
+
+                val result = registeredCmd.execute(cmdContext)
+                if (result.success) {
+                    return@withContext result.message
+                } else {
+                    return@withContext "❌ [EXEC] $firstWord فشل: ${result.message}"
+                }
+            }
+
             when {
                 command == "build" -> {
                     val buildCmd = settings["executor_build_command"] as? String ?: "echo 'build completed'"
@@ -609,6 +670,107 @@ class BuilderEngine(
             }
         }
         return null
+    }
+
+    suspend fun runTreedocNew(remainder: String, matchedType: String): Pair<String, Map<String, String>?> = withContext(Dispatchers.IO) {
+        try {
+            val (args, flags) = CommandRegistry.parseArgsAndFlags(remainder)
+            val base = getBaseDirForPrefix("@builder")
+            
+            val rawPath = args["path"] ?: args["folder"] ?: run {
+                val firstWord = remainder.trim().split(" ").firstOrNull() ?: ""
+                if (firstWord.startsWith("--") || firstWord.isEmpty()) "." else firstWord
+            }
+            
+            val target = if (rawPath == "." || rawPath == "" || rawPath == "SmartPlatform") {
+                base
+            } else {
+                val fObj = File(rawPath)
+                if (fObj.isAbsolute && fObj.exists()) fObj else File(base, rawPath)
+            }
+            
+            if (!target.exists()) {
+                target.mkdirs()
+            }
+
+            val fmt = args["format"] ?: "json"
+            val copyClipboard = !flags.contains("no-clip")
+
+            val report: String
+            val ext: String
+
+            if (fmt.lowercase(Locale.ROOT) == "json") {
+                ext = "json"
+                val rootArray = JSONArray()
+                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                
+                val walkRecursive = matchedType == "scan" || flags.contains("recursive") || args["recursive"] == "true"
+                val files = mutableListOf<File>()
+                
+                if (walkRecursive) {
+                    target.walkTopDown().forEach { f ->
+                        if (f.absolutePath != target.absolutePath && !IGNORE_DIRS.contains(f.name)) {
+                            files.add(f)
+                        }
+                    }
+                } else {
+                    target.listFiles()?.forEach { f ->
+                        if (!IGNORE_DIRS.contains(f.name)) {
+                            files.add(f)
+                        }
+                    }
+                }
+
+                for (file in files) {
+                    val obj = JSONObject().apply {
+                        put("name", file.name)
+                        put("path", file.relativeTo(base).path)
+                        put("size", if (file.isDirectory) 0L else file.length())
+                        put("extension", file.extension)
+                        put("lastModified", sdf.format(Date(file.lastModified())))
+                    }
+                    rootArray.put(obj)
+                }
+                report = rootArray.toString(4)
+            } else if (fmt.lowercase(Locale.ROOT) == "html") {
+                ext = "html"
+                val tree = collectTreeData(target, showSize = true, showMtime = true, showCount = true)
+                val sb = java.lang.StringBuilder()
+                sb.append("<!DOCTYPE html><html lang=\"ar\" dir=\"rtl\"><head><meta charset=\"UTF-8\"><title>TreeDoc Report</title></head><body>")
+                sb.append("<div style=\"background:#111; color:#fff; padding:20px; font-family:sans-serif;\">")
+                sb.append("<h1>📂 تقرير مستكشف شجرة المجلد</h1><p>مسار المجلد: ${target.absolutePath}</p>")
+                fun buildHtmlItems(nodes: List<TreeNode>) {
+                    for (node in nodes) {
+                        sb.append("<div style=\"display:flex; justify-content:space-between; padding:5px; background:#222; margin-bottom:2px;\">")
+                        sb.append("<span>${if (node.type == "directory") "📁" else "📄"} ${node.name}</span>")
+                        sb.append("<span>${node.size ?: ""}</span></div>")
+                        if (node.children.isNotEmpty()) {
+                            buildHtmlItems(node.children)
+                        }
+                    }
+                }
+                buildHtmlItems(tree)
+                sb.append("</div></body></html>")
+                report = sb.toString()
+            } else {
+                ext = "txt"
+                val tree = collectTreeData(target, showSize = true, showMtime = true, showCount = true)
+                report = buildTextReport(target.absolutePath, tree, showSize = true, showMtime = true, showCount = true)
+            }
+
+            if (copyClipboard) {
+                withContext(Dispatchers.Main) {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("TreeDoc Report", report))
+                }
+            }
+
+            val outFile = File(target, "tree_report.$ext")
+            outFile.writeText(report, Charsets.UTF_8)
+            "✅ [TREEDOC] تقرير $fmt جاهز: ${outFile.name}" to mapOf("report" to report, "path" to outFile.absolutePath)
+        } catch (e: Exception) {
+            "❌ [TREEDOC] فشل: ${e.message}" to null
+        }
     }
 
     /**
@@ -785,6 +947,46 @@ class BuilderEngine(
         }
         sb.append("]")
         return sb.toString()
+    }
+
+    private fun showSystemNotification(msg: String) {
+        try {
+            val ns = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            val channelId = "SmartPlatformChannel"
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val name = "مراقب المنصة الذكية"
+                val importance = android.app.NotificationManager.IMPORTANCE_HIGH
+                val channel = android.app.NotificationChannel(channelId, name, importance)
+                ns.createNotificationChannel(channel)
+            }
+
+            val icon = android.R.drawable.ic_dialog_info
+            val intent = Intent(context, com.example.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                context, 99, intent, android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(icon)
+                .setContentTitle("نتائج تنفيذ محرك الأوامر")
+                .setContentText(msg)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(msg))
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+
+            ns.notify(991, builder.build())
+            
+            // Show toast on Main thread
+            kotlinx.coroutines.MainScope().launch {
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("BuilderEngine", "Failed to show notification: ${e.message}")
+        }
     }
 }
 

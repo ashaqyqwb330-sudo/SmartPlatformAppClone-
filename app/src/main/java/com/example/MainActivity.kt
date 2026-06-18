@@ -995,10 +995,13 @@ fun MonitorScreen(viewModel: MainViewModel) {
                                         )
                                     }
 
+                                    val isFailedLog = log.message.contains("❌") || log.message.contains("فشل") || (log.details != null && (log.details.contains("❌") || log.details.contains("فشل")))
+                                    val textColor = if (isFailedLog) DangerRed else TextSilver
+                                    val detailsColor = if (isFailedLog) DangerRed.copy(alpha = 0.8f) else TextGray
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(log.message, color = TextSilver, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text(log.message, color = textColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                         if (!log.details.isNullOrBlank()) {
-                                            Text(log.details, color = TextGray, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                            Text(log.details, color = detailsColor, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                                         }
                                     }
 
@@ -2280,6 +2283,65 @@ fun SettingsScreen(
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text("تهيئة المفتاح والدمج الذكي", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // System Prompt card for AI Helpers
+        item {
+            val localClipboardManager = LocalClipboardManager.current
+            val promptText = """
+أنت مساعد ذكي لتطبيق "المراقب الذكي". يمكنك إصدار أوامر للتحكم في ملفات المستخدم باستخدام الصيغة التالية:
+@executor:command_name --param1=value1 --param2=value2
+أو باستخدام كتلة JSON بعد اسم الأمر.
+الأوامر المتاحة:
+- scan: مسح مجلد. مثال: @executor:scan --path=/Downloads --format=json
+- move: نقل ملف. مثال: @executor:move --path=/a.pdf --dest=/Books/
+- rename: إعادة تسمية. مثال: @executor:rename --path=/a.pdf --new-name=كتاب.pdf
+- report: تقرير عن مجلد. مثال: @executor:report --path=/Books --format=html
+عندما يطلب منك المستخدم مهمة (مثل "نظم مجلد التنزيلات")، اشرح له خطتك أولاً، ثم ضع الأوامر في نهاية ردك ليتمكن المستخدم من نسخها وتنفيذها فوراً.
+            """.trimIndent()
+
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("موجّه النظام للمساعدات الذكية (System Prompt)", color = MetallicGold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("انسخ هذا التوجيه التأسيسي وأعطه لمساعد الذكاء الاصطناعي الخارجي (مثل ChatGPT أو DeepSeek) لتمكينه من فهم بروتوكول الأوامر وإصدارها بشكل دقيق تماماً.", color = TextGray, fontSize = 10.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .background(Color(0xFF0F172A), RoundedCornerShape(8.dp))
+                            .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = promptText,
+                            color = TextSilver,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                            textAlign = TextAlign.Right
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(10.dp))
+                    
+                    Button(
+                        onClick = {
+                            localClipboardManager.setText(AnnotatedString(promptText))
+                            Toast.makeText(context, "تم نسخ موجّه المساعد الذكي للحافظة!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
+                        modifier = Modifier.fillMaxWidth().height(42.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "نسخ", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("نسخ موجّه الأوامر للمساعدات الذكية", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
