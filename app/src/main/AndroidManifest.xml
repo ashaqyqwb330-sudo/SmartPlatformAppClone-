@@ -39,6 +39,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".service.TransparentActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
         <!-- Services -->
         <service
             android:name=".service.ClipboardMonitorService"

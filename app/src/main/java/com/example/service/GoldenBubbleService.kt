@@ -41,6 +41,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import kotlinx.coroutines.flow.first
 
 import android.widget.ScrollView
 import android.view.inputmethod.InputMethodManager
@@ -68,6 +71,9 @@ class GoldenBubbleService : Service(), LifecycleOwner {
     private lateinit var statusTxt: TextView
     private lateinit var lastActionTxt: TextView
     private lateinit var toggleStatusBtn: Button
+    
+    private lateinit var bubbleStatusTxt: TextView
+    private var clipboardReceiver: BroadcastReceiver? = null
 
     private val isPaused: Boolean
         get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
@@ -83,6 +89,29 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         super.onCreate()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         database = AppDatabase.getDatabase(this)
+        
+        // Register broadcast receiver for clipboard updates (Problem 1)
+        clipboardReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == "com.example.ACTION_CLIPBOARD_UPDATED") {
+                    val text = intent.getStringExtra("extra_text") ?: ""
+                    if (text.isNotBlank()) {
+                        Log.d("GoldenBubbleService", "Received clipboard broadcast: size=${text.length}")
+                        onClipboardTextDetected(text)
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter("com.example.ACTION_CLIPBOARD_UPDATED")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(clipboardReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(clipboardReceiver, filter)
+            }
+        } catch (e: Exception) {
+            Log.e("GoldenBubbleService", "Error registering receiver: ${e.message}")
+        }
         
         startGoldenPolling()
         Log.d("GoldenBubbleService", "GoldenBubbleService created and polling handler started.")
@@ -236,6 +265,9 @@ class GoldenBubbleService : Service(), LifecycleOwner {
     private fun updateLastActionText(msg: String) {
         try {
             lastActionTxt.text = "آخر إجراء: $msg"
+            if (::bubbleStatusTxt.isInitialized) {
+                bubbleStatusTxt.text = msg
+            }
         } catch (e: Exception) {}
     }
 
@@ -312,23 +344,49 @@ class GoldenBubbleService : Service(), LifecycleOwner {
             // Root FrameLayout
             val root = FrameLayout(this)
 
-            // 1. COLLAPSED DOT VIEW (Gold theme)
+            // 1. COLLAPSED CONTAINER VIEW (Contains Circle bubble + tiny Text beneath it - Problem 4)
             val collapsedLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                visibility = View.VISIBLE
+            }
+
+            // The Gold Circle Bubble itself
+            val circleBubble = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
                 background = createCircleDrawable("#1A1A2E").apply {
                     setStroke(dpToPx(2), Color.parseColor("#FFD700"))
                 }
+                val lbTxt = TextView(this@GoldenBubbleService).apply {
+                    text = "✨"
+                    setTextColor(Color.WHITE)
+                    textSize = 22f
+                    gravity = Gravity.CENTER
+                }
+                addView(lbTxt)
             }
-            val logoTxt = TextView(this).apply {
-                text = "✨"
-                setTextColor(Color.WHITE)
-                textSize = 24f
-                gravity = Gravity.CENTER
-            }
-            collapsedLayout.addView(logoTxt)
+            val bubbleParams = LinearLayout.LayoutParams(dpToPx(54), dpToPx(54))
+            collapsedLayout.addView(circleBubble, bubbleParams)
 
-            val collapsedParams = FrameLayout.LayoutParams(dpToPx(56), dpToPx(56)).apply {
+            // Tiny TextView below circleBubble
+            bubbleStatusTxt = TextView(this).apply {
+                text = "المراقب الذكي - نشط"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 9f
+                gravity = Gravity.CENTER
+                setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2))
+                background = createRoundedDrawable("#2A1A3E", 4f, "#FFD700", 1)
+                val statusParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, dpToPx(4), 0, 0)
+                }
+                layoutParams = statusParams
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            collapsedLayout.addView(bubbleStatusTxt)
+
+            val collapsedParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.CENTER
             }
             root.addView(collapsedLayout, collapsedParams)
@@ -571,8 +629,11 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                 background = createRoundedDrawable("#1E1D3A", 8f, "#FFD700", 1)
                 setOnClickListener {
                     try {
-                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                        imm.showInputMethodPicker()
+                        // Start TransparentActivity to guarantee IME system dialog display (Problem 2)
+                        val intent = Intent(this@GoldenBubbleService, TransparentActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        }
+                        startActivity(intent)
                     } catch (e: Exception) {
                         Toast.makeText(applicationContext, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
@@ -583,6 +644,51 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                 layoutParams = ksbParams
             }
             expandedLayout.addView(keyboardBtn)
+
+            // Copy Latest Logs Button (Problem 5)
+            val copyLogsBtn = Button(this).apply {
+                text = "📋 نسخ آخر الأحداث"
+                setTextColor(Color.parseColor("#E2E8F0"))
+                textSize = 11f
+                background = createRoundedDrawable("#1F2937", 8f, "#64748B", 1)
+                setOnClickListener {
+                    serviceScope.launch {
+                        try {
+                            val smartPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+                            val count = smartPrefs.getInt("log_copy_count", 5)
+                            
+                            // Get current logs list snapshot
+                            val logs = database.dao().getAllLogs().first().take(count)
+                            if (logs.isEmpty()) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(applicationContext, "سجل الأحداث فارغ.", Toast.LENGTH_SHORT).show()
+                                }
+                                return@launch
+                            }
+                            
+                            val formattedLogs = logs.joinToString("\n") { log ->
+                                "[${getRelativeTimeString(log.timestamp)}] ${log.message}"
+                            }
+                            
+                            withContext(Dispatchers.Main) {
+                                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("Event Logs", formattedLogs)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(applicationContext, "تم نسخ آخر $count أحداث بنجاح!", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(applicationContext, "خطأ أثناء نسخ الأحداث: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+                val clParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
+                    setMargins(0, 0, 0, dpToPx(8))
+                }
+                layoutParams = clParams
+            }
+            expandedLayout.addView(copyLogsBtn)
 
             // Actions panel buttons Row (Toggle pause, stop entire service)
             val actionsRow = LinearLayout(this).apply {
@@ -704,20 +810,27 @@ class GoldenBubbleService : Service(), LifecycleOwner {
 
     private fun manualCollectClipboard() {
         try {
+            val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+            val liveText = sharedPrefs.getString("live_clipboard_text", "") ?: ""
+            
+            var textToProcess = ""
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             if (clipboard.hasPrimaryClip()) {
                 val clipData = clipboard.primaryClip
                 if (clipData != null && clipData.itemCount > 0) {
-                    val text = clipData.getItemAt(0).text?.toString() ?: ""
-                    if (text.isNotBlank()) {
-                        Toast.makeText(applicationContext, "🔄 جاري معالجة النص يدوياً...", Toast.LENGTH_SHORT).show()
-                        processClipboardContent(text, force = true)
-                    } else {
-                        Toast.makeText(applicationContext, "الحافظة فارغة بالكامل.", Toast.LENGTH_SHORT).show()
-                    }
+                    textToProcess = clipData.getItemAt(0).text?.toString() ?: ""
                 }
+            }
+            
+            if (textToProcess.isBlank()) {
+                textToProcess = liveText
+            }
+            
+            if (textToProcess.isNotBlank()) {
+                Toast.makeText(applicationContext, "🔄 جاري معالجة النص يدوياً...", Toast.LENGTH_SHORT).show()
+                processClipboardContent(textToProcess, force = true)
             } else {
-                Toast.makeText(applicationContext, "لا يوجد نص منسوخ في الحافظة.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(applicationContext, "الحافظة فارغة بالكامل ولم يتم استقبال أي نص.", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             Toast.makeText(applicationContext, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -769,6 +882,13 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         removeGoldenView()
         handler.removeCallbacks(clipboardRunnable)
         isPollingActive = false
+        clipboardReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (e: Exception) {
+                Log.e("GoldenBubbleService", "Error unregistering receiver: ${e.message}")
+            }
+        }
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         serviceScope.cancel()
         super.onDestroy()

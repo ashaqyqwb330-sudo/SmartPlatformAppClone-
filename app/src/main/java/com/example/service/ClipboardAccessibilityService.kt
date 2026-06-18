@@ -89,18 +89,6 @@ class ClipboardAccessibilityService : AccessibilityService() {
         try {
             createNotificationChannel()
             
-            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-                // Suspended on Android 10+ in favor of BuilderIME
-                startForeground(
-                    NOTIFICATION_ID, 
-                    buildNotification(
-                        "مساعد الحافظة: معلق على أندرويد 10+", 
-                        "الرجاء تمكين 'لوحة مفاتيح الأتمتة الذكية' للتشغيل الآمن للأجهزة الحديثة."
-                    )
-                )
-                return
-            }
-
             val paused = isPaused
             val title = if (paused) "مساعد الحافظة: متوقف مؤقتاً" else "مساعد الحافظة: يعمل بنشاط"
             val text = if (paused) "المراقبة متوقفة مؤقتاً." else "مساعد الحافظة يقوم بالفحص المباشر والفوري بالخلفية."
@@ -109,11 +97,9 @@ class ClipboardAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Error starting foreground in AccessibilityService: ${e.message}")
         }
 
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-            getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
-                .registerOnSharedPreferenceChangeListener(prefsListener)
-            updatePollingState()
-        }
+        getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+            .registerOnSharedPreferenceChangeListener(prefsListener)
+        updatePollingState()
     }
 
     private fun updatePollingState() {
@@ -176,6 +162,24 @@ class ClipboardAccessibilityService : AccessibilityService() {
             if (text.isNotBlank() && text != lastKnownClipText) {
                 lastKnownClipText = text
                 Log.d(TAG, "Accessibility detected clipboard change. Processing...")
+                
+                // Save live clipboard to SharedPreferences so GoldenBubbleService can fetch it instantly
+                getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("live_clipboard_text", text)
+                    .apply()
+
+                // Broadcast raw text change
+                try {
+                    val updateIntent = Intent("com.example.ACTION_CLIPBOARD_UPDATED").apply {
+                        putExtra("extra_text", text)
+                        setPackage(packageName)
+                    }
+                    sendBroadcast(updateIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to broadcast: ${e.message}")
+                }
+
                 onNewClipboardTextDetected(text)
             }
         } catch (e: Exception) {

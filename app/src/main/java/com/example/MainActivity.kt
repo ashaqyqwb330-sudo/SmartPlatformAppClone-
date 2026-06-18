@@ -81,8 +81,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Auto-start Golden Bubble Service V2 if overlay permission is granted
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this)) {
+        // Auto-start Golden Bubble Service V2 if overlay permission is granted and option is enabled (Problem 3)
+        val smartPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+        val goldenBubbleEnabled = smartPrefs.getBoolean("golden_bubble_enabled", true)
+        if (goldenBubbleEnabled && (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this))) {
             try {
                 startService(Intent(this, com.example.service.GoldenBubbleService::class.java))
             } catch (e: Exception) {
@@ -2075,6 +2077,114 @@ fun SettingsScreen(
                             uncheckedTrackColor = GlassWhite
                         ),
                         modifier = Modifier.testTag("frame_simulation_switch")
+                    )
+                }
+            }
+        }
+
+        // Golden Bubble Service Activator Card (Problem 3)
+        item {
+            val smartPrefs = remember(context) { context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE) }
+            var goldenBubbleActive by remember {
+                mutableStateOf(smartPrefs.getBoolean("golden_bubble_enabled", true))
+            }
+            
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("الفقاعة الذهبية العائلة V2", color = MetallicGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("تشغيل أو إيقاف خدمة الكرة المساعدة الذهبية العائمة على الشاشة لسهولة الأتمتة السريعة", color = TextGray, fontSize = 10.sp)
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Switch(
+                        checked = goldenBubbleActive,
+                        onCheckedChange = { isChecked ->
+                            goldenBubbleActive = isChecked
+                            smartPrefs.edit().putBoolean("golden_bubble_enabled", isChecked).apply()
+                            
+                            val serviceIntent = Intent(context, com.example.service.GoldenBubbleService::class.java)
+                            if (isChecked) {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(context)) {
+                                    Toast.makeText(context, "الرجاء منح صلاحية الظهور فوق التطبيقات لتفعيل الفقاعة!", Toast.LENGTH_LONG).show()
+                                    try {
+                                        val intent = Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "خطأ فتح صلاحيات النظام: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                    goldenBubbleActive = false
+                                    smartPrefs.edit().putBoolean("golden_bubble_enabled", false).apply()
+                                } else {
+                                    try {
+                                        context.startService(serviceIntent)
+                                        Toast.makeText(context, "تم تشغيل الفقاعة الذهبية V2!", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "فشل بدء الخدمة: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            } else {
+                                try {
+                                    context.stopService(serviceIntent)
+                                    Toast.makeText(context, "تم إيقاف الفقاعة الذهبية.", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "فشل إيقاف الخدمة: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = SlateBg,
+                            checkedTrackColor = MetallicGold,
+                            uncheckedThumbColor = TextGray,
+                            uncheckedTrackColor = GlassWhite
+                        ),
+                        modifier = Modifier.testTag("golden_bubble_service_switch")
+                    )
+                }
+            }
+        }
+
+        // Log Copy Count Config Card (Problem 5)
+        item {
+            val smartPrefs = remember(context) { context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE) }
+            var logCopyCount by remember {
+                mutableStateOf(smartPrefs.getInt("log_copy_count", 5).toString())
+            }
+            
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("إعدادات نسخ سجل الأحداث", color = MetallicGold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    
+                    OutlinedTextField(
+                        value = logCopyCount,
+                        onValueChange = { newValue ->
+                            if (newValue.isEmpty() || newValue.all { it.isDigit() }) {
+                                logCopyCount = newValue
+                                val parsed = newValue.toIntOrNull() ?: 5
+                                smartPrefs.edit().putInt("log_copy_count", parsed).apply()
+                            }
+                        },
+                        label = { Text("عدد الأحداث المراد نسخها (log_copy_count)", color = TextMuted, fontSize = 11.sp) },
+                        modifier = Modifier.fillMaxWidth().testTag("log_copy_count_field"),
+                        textStyle = TextStyle(color = TextSilver, fontSize = 12.sp),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "حدد عدد آخر أحداث سيتم نسخها إلى الحافظة دفعة واحدة عند النقر على زر 'نسخ آخر الأحداث' بالفقاعة.",
+                        color = TextGray,
+                        fontSize = 10.sp
                     )
                 }
             }
