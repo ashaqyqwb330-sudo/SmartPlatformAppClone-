@@ -612,6 +612,17 @@ fun MonitorScreen(viewModel: MainViewModel) {
     val createdFiles = viewModel.createdFiles.collectAsState(initial = emptyList()).value
     val eventLogs = viewModel.eventLogs.collectAsState(initial = emptyList()).value
 
+    // New Event Logs Premium Dashboard States
+    var selectedLimit by remember { mutableStateOf(20) } 
+    var selectedTypeFilter by remember { mutableStateOf("الكل") } 
+    var selectedSeverityFilter by remember { mutableStateOf("الكل") } 
+    var sortNewestFirst by remember { mutableStateOf(true) }
+    var isMultiSelectMode by remember { mutableStateOf(false) }
+    var selectedLogIds by remember { mutableStateOf(emptySet<Int>()) }
+    val editedLogsMap = remember { mutableStateMapOf<Int, String>() }
+    var editingLogForDetails by remember { mutableStateOf<LogEntity?>(null) }
+    var editingLogTextState by remember { mutableStateOf("") }
+
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -914,55 +925,490 @@ fun MonitorScreen(viewModel: MainViewModel) {
 
         // Live Event Logs List (سجل الأحداث)
         item {
-            Column {
+            // Apply filtering and sorting dynamically
+            val filteredLogs = remember(
+                eventLogs, selectedLimit, selectedTypeFilter, selectedSeverityFilter, sortNewestFirst, editedLogsMap
+            ) {
+                var list = eventLogs.filter { log ->
+                    val matchesType = when (selectedTypeFilter) {
+                        "الكل" -> true
+                        "الملفات" -> log.type == "builder" || log.type == "treedoc"
+                        "الأوامر" -> log.type == "executor"
+                        "الذكاء الاصطناعي" -> log.type == "gemini"
+                        "النظام" -> log.type == "system" || log.type == "clipboard_service" || log.type == "bubble"
+                        else -> true
+                    }
+
+                    val detail = editedLogsMap[log.id] ?: log.details ?: ""
+                    val isFail = log.message.contains("❌") || log.message.contains("فشل") || detail.contains("❌") || detail.contains("فشل")
+                    val matchesSeverity = when (selectedSeverityFilter) {
+                        "الكل" -> true
+                        "ناجح" -> !isFail
+                        "فشل" -> isFail
+                        else -> true
+                    }
+
+                    matchesType && matchesSeverity
+                }
+
+                list = if (sortNewestFirst) {
+                    list.sortedByDescending { it.timestamp }
+                } else {
+                    list.sortedBy { it.timestamp }
+                }
+
+                val limit = if (selectedLimit == 10) 10 else if (selectedLimit == 20) 20 else if (selectedLimit == 50) 50 else 9999
+                if (limit < 9999) {
+                    list.take(limit)
+                } else {
+                    list
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CardSlateBg.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
+                    .border(1.dp, GlassBorder, RoundedCornerShape(24.dp))
+                    .padding(16.dp)
+            ) {
+                // Header Row
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "سجل الأحداث الحية",
-                        color = TextSilver,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(GoldGlassBg, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.List,
+                                contentDescription = null,
+                                tint = MetallicGold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Text(
+                            text = "لوحة تحكم وتحليل السجلات",
+                            color = TextSilver,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     if (eventLogs.isNotEmpty()) {
                         TextButton(onClick = { viewModel.clearDatabaseLogs() }) {
-                            Text("مسح السجل", color = DangerRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("تصفير السجل", color = DangerRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Filters Pane in styled glass containers
+                Text("تصفية وفلترة الأحداث:", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // 1. LIMIT & SEVERITY Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Limit Filter Buttons
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("الحد الأقصى:", color = TextGray, fontSize = 9.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            listOf(10, 20, 50, 9999).forEach { limit ->
+                                val isSelected = selectedLimit == limit
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(28.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isSelected) MetallicGold else GlassWhite)
+                                        .clickable { selectedLimit = limit }
+                                        .border(1.dp, if (isSelected) MetallicGold else GlassBorder, RoundedCornerShape(8.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (limit == 9999) "الكل" else limit.toString(),
+                                        color = if (isSelected) SlateBg else TextSilver,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Severity Filter Buttons
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("الحالة والأهمية:", color = TextGray, fontSize = 9.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            listOf("الكل", "ناجح", "فشل").forEach { severity ->
+                                val isSelected = selectedSeverityFilter == severity
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(28.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isSelected) MetallicGold else GlassWhite)
+                                        .clickable { selectedSeverityFilter = severity }
+                                        .border(1.dp, if (isSelected) MetallicGold else GlassBorder, RoundedCornerShape(8.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = severity,
+                                        color = if (isSelected) SlateBg else TextSilver,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (eventLogs.isEmpty()) {
+                // 2. TYPE Filter Row
+                Text("نوع العمليات:", color = TextGray, fontSize = 9.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(listOf("الكل", "الملفات", "الأوامر", "الذكاء الاصطناعي", "النظام")) { type ->
+                        val isSelected = selectedTypeFilter == type
+                        Box(
+                            modifier = Modifier
+                                .height(26.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) MetallicGold else GlassWhite)
+                                .clickable { selectedTypeFilter = type }
+                                .border(1.dp, if (isSelected) MetallicGold else GlassBorder, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = type,
+                                color = if (isSelected) SlateBg else TextSilver,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 3. SORT & MODE Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Sorting Switch button
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(GlassWhite)
+                            .clickable { sortNewestFirst = !sortNewestFirst }
+                            .border(1.dp, GlassBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            tint = MetallicGold,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = if (sortNewestFirst) "الترتيب: الأحدث أولاً" else "الترتيب: الأقدم أولاً",
+                            color = TextSilver,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Multi-select toggle button
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isMultiSelectMode) MetallicGold.copy(alpha = 0.2f) else GlassWhite)
+                            .clickable {
+                                isMultiSelectMode = !isMultiSelectMode
+                                if (isMultiSelectMode) {
+                                    // Prepopulate selected log IDs with all currently filtered log IDs
+                                    selectedLogIds = filteredLogs.map { it.id }.toSet()
+                                    Toast.makeText(context, "تم تحديد ${filteredLogs.size} سجلات تلقائياً.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    selectedLogIds = emptySet()
+                                }
+                            }
+                            .border(1.dp, if (isMultiSelectMode) MetallicGold else GlassBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isMultiSelectMode) Icons.Default.CheckCircle else Icons.Default.List,
+                            contentDescription = null,
+                            tint = if (isMultiSelectMode) MetallicGold else TextSilver,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "وضع التحديد المتعدد",
+                            color = if (isMultiSelectMode) MetallicGold else TextSilver,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // EXPORT BAR: Show if isMultiSelectMode is active OR any logs are selected
+                val activeSelectedLogs = if (isMultiSelectMode) {
+                    filteredLogs.filter { selectedLogIds.contains(it.id) }
+                } else {
+                    filteredLogs
+                }
+
+                if (isMultiSelectMode && filteredLogs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TextButton(
+                            onClick = {
+                                selectedLogIds = filteredLogs.map { it.id }.toSet()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("تحديد الكل", color = MetallicGold, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        TextButton(
+                            onClick = { selectedLogIds = emptySet() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("إلغاء التحديد", color = TextMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                if (activeSelectedLogs.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(GoldGlassBg, RoundedCornerShape(12.dp))
+                            .border(1.dp, GlassBorder, RoundedCornerShape(12.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = "تصدير السجلات المحددة: (${activeSelectedLogs.size} من أصل ${filteredLogs.size})",
+                            color = MetallicGold,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+
+                        // 1. Copy & Share Rows
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val logText = AppReportHelper.generateTxtReport(activeSelectedLogs, editedLogsMap)
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Event Logs", logText))
+                                    Toast.makeText(context, "📋 تم نسخ سجل المخرجات التام!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = CardSlateBg, contentColor = TextSilver),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(32.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = null, tint = MetallicGold, modifier = Modifier.size(12.dp))
+                                    Text("نسخ TXT", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    val text = AppReportHelper.generateTxtReport(activeSelectedLogs, editedLogsMap)
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, text)
+                                    }
+                                    val chooser = Intent.createChooser(shareIntent, "مشاركة السجل")
+                                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    context.startActivity(chooser)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = CardSlateBg, contentColor = TextSilver),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(32.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.Send, contentDescription = null, tint = MetallicGold, modifier = Modifier.size(12.dp))
+                                    Text("مشاركة", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        // 2. Save options HTML + TXT, CSV, JSON
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val html = AppReportHelper.generateInteractiveHtmlReport(activeSelectedLogs, editedLogsMap)
+                                    AppReportHelper.saveAndOpenHtmlReport(context, html)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1.3f).height(32.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.Star, contentDescription = null, tint = SlateBg, modifier = Modifier.size(12.dp))
+                                    Text("🌐 HTML تفاعلي", fontSize = 9.sp, fontWeight = FontWeight.ExtraBold)
+                                }
+                            }
+
+                            listOf("TXT", "CSV", "JSON").forEach { fmt ->
+                                Button(
+                                    onClick = {
+                                        when (fmt) {
+                                            "TXT" -> {
+                                                val txt = AppReportHelper.generateTxtReport(activeSelectedLogs, editedLogsMap)
+                                                AppReportHelper.saveAndShareFile(context, txt, "logs_export.txt", "text/plain")
+                                            }
+                                            "CSV" -> {
+                                                val csv = AppReportHelper.generateCsvReport(activeSelectedLogs, editedLogsMap)
+                                                AppReportHelper.saveAndShareFile(context, csv, "logs_export.csv", "text/csv")
+                                            }
+                                            "JSON" -> {
+                                                val json = AppReportHelper.generateJsonReport(activeSelectedLogs, editedLogsMap)
+                                                AppReportHelper.saveAndShareFile(context, json, "logs_export.json", "application/json")
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CardSlateBg, contentColor = TextSilver),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(0.9f).height(32.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(fmt, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
+                // Show empty indicator if logs list is empty
+                if (filteredLogs.isEmpty()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(80.dp)
+                            .height(100.dp)
                             .background(GlassWhite, RoundedCornerShape(20.dp))
                             .border(1.dp, GlassBorder, RoundedCornerShape(20.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("سجل الأحداث نظيف وفارغ.", color = TextMuted, fontSize = 12.sp)
+                        Text(
+                            text = "لا توجد سجلات مطابقة لمعايير الفلترة المحددة.",
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 } else {
+                    // Logs rendering layout
                     Column(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        eventLogs.take(15).forEach { log ->
+                        filteredLogs.forEach { log ->
+                            val isSelected = selectedLogIds.contains(log.id)
+                            val finalDetails = editedLogsMap[log.id] ?: log.details ?: ""
+                            
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(GlassWhite, RoundedCornerShape(14.dp))
-                                    .border(1.dp, GlassBorder.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-                                    .padding(12.dp)
+                                    .background(
+                                        if (isMultiSelectMode && isSelected) GoldGlassBg else GlassWhite,
+                                        RoundedCornerShape(14.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isMultiSelectMode && isSelected) MetallicGold.copy(alpha = 0.5f) else GlassBorder.copy(alpha = 0.5f),
+                                        RoundedCornerShape(14.dp)
+                                    )
+                                    .clickable {
+                                        if (isMultiSelectMode) {
+                                            selectedLogIds = if (isSelected) selectedLogIds - log.id else selectedLogIds + log.id
+                                        }
+                                    }
+                                    .padding(10.dp)
                             ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Checkbox if multi select mode is on
+                                    if (isMultiSelectMode) {
+                                        Checkbox(
+                                            checked = isSelected,
+                                            onCheckedChange = { checked ->
+                                                selectedLogIds = if (checked) selectedLogIds + log.id else selectedLogIds - log.id
+                                            },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = MetallicGold,
+                                                checkmarkColor = SlateBg,
+                                                uncheckedColor = TextGray
+                                            ),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+
+                                    // Type Icon badge
                                     Box(
                                         modifier = Modifier
-                                            .size(24.dp)
+                                            .size(28.dp)
                                             .background(
                                                 when (log.type) {
                                                     "builder" -> Color(0x203B82F6)
@@ -995,23 +1441,125 @@ fun MonitorScreen(viewModel: MainViewModel) {
                                         )
                                     }
 
-                                    val isFailedLog = log.message.contains("❌") || log.message.contains("فشل") || (log.details != null && (log.details.contains("❌") || log.details.contains("فشل")))
+                                    val isFailedLog = log.message.contains("❌") || log.message.contains("فشل") || finalDetails.contains("❌") || finalDetails.contains("فشل")
                                     val textColor = if (isFailedLog) DangerRed else TextSilver
                                     val detailsColor = if (isFailedLog) DangerRed.copy(alpha = 0.8f) else TextGray
+
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(log.message, color = textColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        if (!log.details.isNullOrBlank()) {
-                                            Text(log.details, color = detailsColor, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = log.message,
+                                                color = textColor,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            
+                                            // ✏️ Edit Action Button
+                                            IconButton(
+                                                onClick = {
+                                                    editingLogForDetails = log
+                                                    editingLogTextState = finalDetails
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Edit event description",
+                                                    tint = MetallicGold.copy(alpha = 0.8f),
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                        if (finalDetails.isNotBlank()) {
+                                            Text(
+                                                text = finalDetails,
+                                                color = detailsColor,
+                                                fontSize = 10.sp,
+                                                maxLines = 3,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
                                     }
 
                                     Text(
-                                        text = SimpleDateFormat("mm:ss", Locale.getDefault()).format(Date(log.timestamp)),
+                                        text = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(log.timestamp)),
                                         color = TextMuted,
                                         fontSize = 9.sp
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Edit Log Details Dialog
+    if (editingLogForDetails != null) {
+        Dialog(onDismissRequest = { editingLogForDetails = null }) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CardSlateBg, RoundedCornerShape(24.dp))
+                    .border(1.dp, GlassBorder, RoundedCornerShape(24.dp))
+                    .padding(20.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "✏️ تحرير وصف الحدث",
+                        color = MetallicGold,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "الحدث الأصلي:\n${editingLogForDetails?.message}",
+                        color = TextSilver,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editingLogTextState,
+                        onValueChange = { editingLogTextState = it },
+                        modifier = Modifier.fillMaxWidth().height(120.dp),
+                        label = { Text("الوصف أو التفاصيل الجديدة المحدثة", color = TextGray, fontSize = 11.sp) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MetallicGold,
+                            unfocusedBorderColor = GlassBorder,
+                            focusedTextColor = TextSilver,
+                            unfocusedTextColor = TextSilver
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                editingLogForDetails?.let { log ->
+                                    editedLogsMap[log.id] = editingLogTextState
+                                }
+                                editingLogForDetails = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("تحديث")
+                        }
+                        OutlinedButton(
+                            onClick = { editingLogForDetails = null },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSilver),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("إلغاء")
                         }
                     }
                 }
