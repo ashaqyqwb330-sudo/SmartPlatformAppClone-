@@ -531,8 +531,24 @@ class BuilderEngine(
      */
     suspend fun executeDirective(command: String, prefixes: List<String>? = null): String = withContext(Dispatchers.IO) {
         try {
-            val trimmedCmd = command.trim()
-            val parts = trimmedCmd.split(Regex("\\s+"), 2)
+            var cleanCmd = command.trim()
+            val listPrefixes = prefixes ?: listOf("@executor", "@builder", "@treedoc")
+
+            // If the command consists of multiple lines, support multi-line execution via processText
+            if (cleanCmd.contains("\n")) {
+                val results = processText(command)
+                if (results.isNotEmpty()) {
+                    return@withContext results.joinToString("\n") { it.message }
+                }
+            }
+
+            for (p in listPrefixes) {
+                if (cleanCmd.startsWith("$p:")) {
+                    cleanCmd = cleanCmd.substring("$p:".length).trim()
+                    break
+                }
+            }
+            val parts = cleanCmd.split(Regex("\\s+"), 2)
             val firstWord = parts[0]
             val paramRemainder = if (parts.size > 1) parts[1] else ""
 

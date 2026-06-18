@@ -1,0 +1,36 @@
+[
+  {
+    "name": "اختبار إنشاء مجلد",
+    "command": "@executor:mkdir --path=TestFolder",
+    "expected": "success"
+  },
+  {
+    "name": "اختبار نقل ملف",
+    "command": "@executor:move --path=file.txt --dest=TestFolder/",
+    "expected": "success"
+  },
+  {
+    "name": "اختبار إعادة تسمية ملف",
+    "command": "@executor:rename --path=TestFolder/file.txt --newName=renamed.txt",
+    "expected": "success"
+  },
+  {
+    "name": "اختبار نسخ آمن لملف",
+    "command": "@executor:copy-safe --path=TestFolder/renamed.txt --dest=copied.txt",
+    "expected": "success"
+  },
+  {
+    "name": "اختبار حذف ملف",
+    "command": "@executor:delete --path=copied.txt",
+    "expected": "success"
+  },
+  {
+    "name": "اختبار مجموعة أوامر مع شروحات",
+    "commands": [
+      "@executor:mkdir --path=Test",
+      "هذا شرح لا يجب أن يسبب مشكلة",
+      "@executor:rename --path=Test --newName=Test2"
+    ],
+    "expected": "multi_success"
+  }
+]

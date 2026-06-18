@@ -27,6 +27,7 @@ object CommandRegistry {
         registerCommand("report", ReportCommand())
         registerCommand("open", OpenCommand())
         registerCommand("mkdir", MkdirCommand())
+        registerCommand("selftest", SelfTestCommand())
     }
 
     fun registerCommand(name: String, command: Command) {
@@ -39,12 +40,37 @@ object CommandRegistry {
 
     /**
      * Parses arguments from both JSON block and CLI-like double dash --key=val format.
+     * JSON parameters have priority and overwrite CLI parameters.
      */
     fun parseArgsAndFlags(input: String): Pair<Map<String, String>, List<String>> {
         val args = mutableMapOf<String, String>()
         val flags = mutableListOf<String>()
 
         var trimmed = input.trim()
+
+        // Match CLI arguments first as baseline
+        val cliArgs = mutableMapOf<String, String>()
+        val cliFlags = mutableListOf<String>()
+        val regex = """--([a-zA-Z0-9_-]+)(?:=(?:["']([^"']*)["']|([^\s"']*)))?""".toRegex()
+        val matches = regex.findAll(trimmed)
+        for (match in matches) {
+            val key = match.groupValues[1]
+            val valueInQuotes = match.groupValues[2]
+            val valueWithoutQuotes = match.groupValues[3]
+            
+            val value = if (valueInQuotes.isNotEmpty() || (match.value.contains("=") && (match.groupValues[0].contains("\"\"") || match.groupValues[0].contains("''")))) {
+                valueInQuotes
+            } else {
+                valueWithoutQuotes
+            }
+            if (value.isEmpty() && !match.value.contains("=")) {
+                cliFlags.add(key)
+            } else {
+                cliArgs[key] = value
+            }
+        }
+
+        // Strip markdown backticks if any
         if (trimmed.startsWith("```json")) {
             trimmed = trimmed.removePrefix("```json")
             if (trimmed.endsWith("```")) {
@@ -59,44 +85,48 @@ object CommandRegistry {
             trimmed = trimmed.trim()
         }
 
-        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        // Robust JSON detection block
+        val firstBrace = trimmed.indexOf('{')
+        val lastBrace = trimmed.lastIndexOf('}')
+        var jsonParsed = false
+
+        if (firstBrace != -1 && lastBrace > firstBrace) {
+            val jsonPossible = trimmed.substring(firstBrace, lastBrace + 1)
             try {
-                val json = JSONObject(trimmed)
+                val json = JSONObject(jsonPossible)
+                val jsonArgs = mutableMapOf<String, String>()
+                val jsonFlags = mutableListOf<String>()
+
                 val keys = json.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
                     val value = json.opt(key)
                     if (value is Boolean) {
-                        if (value) flags.add(key)
+                        if (value) jsonFlags.add(key)
                     } else {
-                        args[key] = value?.toString() ?: ""
+                        jsonArgs[key] = value?.toString() ?: ""
                     }
                 }
-                return Pair(args, flags)
+
+                // JSON takes priority over CLI
+                args.putAll(cliArgs)
+                args.putAll(jsonArgs)
+
+                flags.addAll(cliFlags)
+                for (jf in jsonFlags) {
+                    if (!flags.contains(jf)) {
+                        flags.add(jf)
+                    }
+                }
+                jsonParsed = true
             } catch (e: Exception) {
                 // fall back to CLI if JSON parsing fails
             }
         }
 
-        // CLI parsing via regular expression
-        // Matches: --key=value OR --key="value with spaces" OR --key='value with spaces' OR --flag
-        val regex = """--([a-zA-Z0-9_-]+)(?:=(?:["']([^"']*)["']|([^\s"']*)))?""".toRegex()
-        val matches = regex.findAll(trimmed)
-        for (match in matches) {
-            val key = match.groupValues[1]
-            val valueInQuotes = match.groupValues[2]
-            val valueWithoutQuotes = match.groupValues[3]
-            
-            val value = if (valueInQuotes.isNotEmpty() || (match.value.contains("=") && (match.groupValues[0].contains("\"\"") || match.groupValues[0].contains("''")))) {
-                valueInQuotes
-            } else {
-                valueWithoutQuotes
-            }
-            if (value.isEmpty() && !match.value.contains("=")) {
-                flags.add(key)
-            } else {
-                args[key] = value
-            }
+        if (!jsonParsed) {
+            args.putAll(cliArgs)
+            flags.addAll(cliFlags)
         }
         
         return Pair(args, flags)
@@ -589,6 +619,10 @@ class ReportCommand : Command {
         // Save report output to disk
         try {
             val reportFile = File(targetDir, filename)
+            val parentFolder = reportFile.parentFile
+            if (parentFolder != null && !parentFolder.exists()) {
+                parentFolder.mkdirs()
+            }
             reportFile.writeText(reportOutput, Charsets.UTF_8)
             
             // Copy to Clipboard as requested
@@ -620,18 +654,37 @@ class ReportCommand : Command {
 // =====================================================================
 class OpenCommand : Command {
     override suspend fun execute(context: CommandContext): CommandResult {
-        val sPath = context.args["path"] ?: return CommandResult(false, "❌ معامل المسار `--path` مطلوب لفتح الملف.")
-        val file = context.getFile(sPath)
+        val sPath = context.args["target"] ?: context.args["path"] ?: return CommandResult(false, "❌ معامل المسار `--target` أو `--path` مطلوب لفتح الملف.")
+        
+        if (sPath.startsWith("http://") || sPath.startsWith("https://") || sPath.startsWith("ftp://")) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(sPath)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                withContext(Dispatchers.Main) {
+                    context.context.startActivity(intent)
+                }
+                context.log("👁️ فتح رابط", "موفق: فتح الرابط الإلكتروني $sPath")
+                return CommandResult(true, "✅ تم فتح الرابط بنجاح: $sPath")
+            } catch (e: Exception) {
+                return CommandResult(false, "❌ فشل فتح الرابط الإلكتروني: ${e.message}")
+            }
+        }
 
+        val file = context.getFile(sPath)
         if (!file.exists()) {
-            return CommandResult(false, "❌ الملف غير موجود لفتحه: ${file.absolutePath}")
+            return CommandResult(false, "❌ الملف أو المجلد غير موجود لفتحه: ${file.absolutePath}")
         }
 
         try {
             val authority = "${context.context.packageName}.fileprovider"
             val uri = FileProvider.getUriForFile(context.context, authority, file)
             val ext = file.extension.lowercase(Locale.ROOT)
-            val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+            val mimeType = if (file.isDirectory) {
+                "resource/folder"
+            } else {
+                MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+            }
 
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
@@ -642,17 +695,22 @@ class OpenCommand : Command {
             withContext(Dispatchers.Main) {
                 context.context.startActivity(intent)
             }
-            context.log("👁️ فتح ملف", "موفق: فتح ${file.name}")
-            return CommandResult(true, "✅ تم تشغيل المعالج الافتراضي لفتح الملف: ${file.name}")
+            val typeStr = if (file.isDirectory) "المجلد" else "الملف"
+            context.log("👁️ فتح $typeStr", "موفق: فتح ${file.name}")
+            return CommandResult(true, "✅ تم تشغيل المعالج الافتراضي لفتح $typeStr: ${file.name}")
         } catch (e: Exception) {
-            return CommandResult(false, "❌ فشل فتح الملف: ${e.message}")
+            return CommandResult(false, "❌ فشل فتح ${if (file.isDirectory) "المجلد" else "الملف"}: ${e.message}")
         }
     }
 
     override suspend fun dryRun(context: CommandContext): String {
-        val sPath = context.args["path"] ?: "غير محدد"
+        val sPath = context.args["target"] ?: context.args["path"] ?: "غير محدد"
+        if (sPath.startsWith("http://") || sPath.startsWith("https://") || sPath.startsWith("ftp://")) {
+            return "[محاكاة (Dry-Run)] جاري طلب فتح الرابط ($sPath) بواسطة متصفح النظام الافتراضي."
+        }
         val file = context.getFile(sPath)
-        return "[محاكاة (Dry-Run)] جاري طلب فتح الملف (موجود: ${file.exists()}) باسم (${file.name}) بواسطة مشغل النظام الافتراضي."
+        val typeStr = if (file.isDirectory) "المجلد" else "الملف"
+        return "[محاكاة (Dry-Run)] جاري طلب فتح $typeStr (موجود: ${file.exists()}) باسم (${file.name}) بواسطة مشغل النظام الافتراضي."
     }
 }
 
@@ -699,5 +757,133 @@ class MkdirCommand : Command {
         val sPath = context.args["path"] ?: "غير محدد"
         val parents = context.flags.contains("parents") || context.args["parents"] == "true"
         return "[محاكاة (Dry-Run)] جاري إنشاء مجلد جديد بمسار ($sPath) مع ميزة الآباء (parents) = $parents"
+    }
+}
+
+// =====================================================================
+// 9. SELFTEST Command
+// =====================================================================
+class SelfTestCommand : Command {
+    override suspend fun execute(context: CommandContext): CommandResult {
+        val sysContext = context.context
+        val timestamp = System.currentTimeMillis()
+        val tempDir = File(sysContext.filesDir, "test_env_$timestamp")
+        tempDir.mkdirs()
+
+        try {
+            // Create dummy file(s)
+            val dummyFile = File(tempDir, "file.txt")
+            dummyFile.writeText("محتوى وهمي للاختبار الذاتي.", Charsets.UTF_8)
+
+            // Read the assets file
+            val jsonString = try {
+                sysContext.assets.open("test_scenarios.json").bufferedReader().use { it.readText() }
+            } catch (e: Exception) {
+                return CommandResult(false, "❌ تعذر قراءة ملف السيناريوهات من الأصول: ${e.message}")
+            }
+
+            val jsonArray = JSONArray(jsonString)
+            val reportBuilder = java.lang.StringBuilder()
+            reportBuilder.appendLine("=== تقرير نظام الاختبار الذاتي (Self-Test Lab) ===")
+            reportBuilder.appendLine("التاريخ: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
+            reportBuilder.appendLine("مجلد الاختبار الآمن: ${tempDir.absolutePath}")
+            reportBuilder.appendLine("--------------------------------------------------")
+
+            val settings = mapOf<String, Any>(
+                "absolute_path_handling" to "relative",
+                "base_dir" to tempDir.absolutePath
+            )
+            val builderEngine = BuilderEngine(sysContext, settings)
+
+            val totalTests = jsonArray.length()
+            var passedCount = 0
+
+            for (i in 0 until totalTests) {
+                val sc = jsonArray.getJSONObject(i)
+                val testName = sc.getString("name")
+                val expected = sc.getString("expected")
+
+                // Handle both single command and commands array
+                val cmdText = if (sc.has("command")) {
+                    sc.getString("command")
+                } else if (sc.has("commands")) {
+                    val arr = sc.getJSONArray("commands")
+                    val sbCmd = java.lang.StringBuilder()
+                    for (j in 0 until arr.length()) {
+                        sbCmd.appendLine(arr.getString(j))
+                    }
+                    sbCmd.toString()
+                } else {
+                    ""
+                }
+
+                // Run processText on the scenario input
+                val results = try {
+                    builderEngine.processText(cmdText)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+
+                val hasFailure = results.any { it.message.contains("❌") || it.message.contains("فشل") }
+                val overallSuccess = results.isNotEmpty() && !hasFailure
+
+                val actual = if (overallSuccess) {
+                    if (expected == "multi_success") "multi_success" else "success"
+                } else {
+                    "failed"
+                }
+
+                val isPassed = actual == expected
+
+                if (isPassed) {
+                    passedCount++
+                    reportBuilder.appendLine("✅ [$testName]")
+                    reportBuilder.appendLine("   - النتيجة المتوقعة: $expected | الفعلية: $actual")
+                    if (results.isNotEmpty()) {
+                        reportBuilder.appendLine("   - التفاصيل: ${results.joinToString("; ") { it.message }}")
+                    }
+                } else {
+                    reportBuilder.appendLine("❌ [$testName] - النص: $cmdText")
+                    reportBuilder.appendLine("   - النتيجة المتوقعة: $expected | الفعلية: $actual")
+                    if (results.isNotEmpty()) {
+                        reportBuilder.appendLine("   - التفاصيل: ${results.joinToString("; ") { it.message }}")
+                    }
+                }
+                reportBuilder.appendLine("--------------------------------------------------")
+            }
+
+            val overallPassed = passedCount == totalTests
+            val overallMsg = if (overallPassed) {
+                "🎉 نجاح تام لمختبر الاختبار الذاتي! تم اجتياز $passedCount من $totalTests اختبارات بنجاح."
+            } else {
+                "⚠️ فشل بعض الاختبارات! تم اجتياز $passedCount من $totalTests اختبارات فقط."
+            }
+
+            reportBuilder.appendLine("النتيجة الإجمالية:")
+            reportBuilder.appendLine(overallMsg)
+
+            val reportString = reportBuilder.toString()
+
+            // Copy to clipboard
+            withContext(Dispatchers.Main) {
+                val clipboard = sysContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Self-Test Report", reportString))
+                android.widget.Toast.makeText(sysContext, overallMsg, android.widget.Toast.LENGTH_LONG).show()
+            }
+
+            context.log("🧪 نظام الاختبار الذاتي", overallMsg)
+
+            return CommandResult(overallPassed, overallMsg, reportString)
+
+        } catch (e: Exception) {
+            return CommandResult(false, "❌ فشل غير متوقع في نظام الاختبار الذاتي: ${e.message}")
+        } finally {
+            // Cleanup safe folder recursion
+            tempDir.deleteRecursively()
+        }
+    }
+
+    override suspend fun dryRun(context: CommandContext): String {
+        return "[محاكاة (Dry-Run)] جاري تشغيل مختبر بيئة الاختبار الذاتي والتحقق من صحة محرك الأوامر."
     }
 }
