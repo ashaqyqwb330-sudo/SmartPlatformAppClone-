@@ -42,6 +42,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+import android.widget.ScrollView
+import android.view.inputmethod.InputMethodManager
+
 /**
  * الخدمة العائمة الذهبية V2 - Golden Bubble Service
  * واجهة تقليدية View-based بحتة لضمان أقصى مستويات الأداء والاستقرار وسرعة الاستجابة.
@@ -148,18 +151,20 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
 
         if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:")) {
-            processClipboardContent(text)
+            processClipboardContent(text, force = false)
         }
     }
 
-    private fun processClipboardContent(text: String) {
+    private fun processClipboardContent(text: String, force: Boolean = false) {
         val sharedPrefs = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
         val textHash = text.trim().hashCode().toString()
-        val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
-        if (textHash == lastProcessedHash && text.isNotBlank()) return
+        if (!force) {
+            val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
+            if (textHash == lastProcessedHash && text.isNotBlank()) return
 
-        val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
-        if (text == lastProcessed && text.isNotBlank()) return
+            val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
+            if (text == lastProcessed && text.isNotBlank()) return
+        }
 
         sharedPrefs.edit().apply {
             putString("last_processed_text_hash", textHash)
@@ -186,6 +191,7 @@ class GoldenBubbleService : Service(), LifecycleOwner {
 
                 if (results.isNotEmpty()) {
                     var buildersCount = 0
+                    var lastCreatedPath = ""
                     for (res in results) {
                         if (res.type == "builder") {
                             buildersCount++
@@ -193,6 +199,7 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                             val size = res.data?.get("size")?.toLongOrNull() ?: 0L
                             val mode = res.data?.get("mode") ?: "w"
                             val fullPath = res.data?.get("full_path") ?: ""
+                            lastCreatedPath = path
 
                             database.dao().insertFile(
                                 FileEntity(path = path, fullPath = fullPath, size = size, mode = mode)
@@ -208,8 +215,13 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                     }
                     
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(applicationContext, "✅ معالجة ناجحة! تم إنشاء وحفظ $buildersCount ملفات.", Toast.LENGTH_SHORT).show()
-                        updateLastActionText("معالجة ناجحة: $buildersCount ملفات تلقائياً")
+                        if (buildersCount > 0 && lastCreatedPath.isNotEmpty()) {
+                            Toast.makeText(applicationContext, "✅ تم إنشاء $lastCreatedPath في المجلد بنجاح!", Toast.LENGTH_LONG).show()
+                            updateLastActionText("تم إنشاء $lastCreatedPath")
+                        } else {
+                            Toast.makeText(applicationContext, "✅ معالجة ناجحة! تم تنفيذ الإجراءات.", Toast.LENGTH_SHORT).show()
+                            updateLastActionText("معالجة ناجحة: تم تنفيذ الإجراءات")
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -229,6 +241,19 @@ class GoldenBubbleService : Service(), LifecycleOwner {
 
     private fun dpToPx(dp: Int): Int {
         return (dp * resources.displayMetrics.density).toInt()
+    }
+
+    private fun getRelativeTimeString(time: Long): String {
+        val diff = System.currentTimeMillis() - time
+        if (diff < 0) return "الآن"
+        val seconds = diff / 1000
+        if (seconds < 60) return "الآن"
+        val minutes = seconds / 60
+        if (minutes < 60) return "منذ $minutes د"
+        val hours = minutes / 60
+        if (hours < 24) return "منذ $hours س"
+        val days = hours / 24
+        return "منذ $days ي"
     }
 
     private fun createCircleDrawable(colorHex: String): GradientDrawable {
@@ -415,11 +440,112 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                 background = createRoundedDrawable("#0F0F1E", 4f)
                 setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
                 val laParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(0, dpToPx(4), 0, dpToPx(10))
+                    setMargins(0, dpToPx(4), 0, dpToPx(6))
                 }
                 layoutParams = laParams
             }
             expandedLayout.addView(lastActionTxt)
+
+            // Event Logs Section (Auto updating from database)
+            val logsTitle = TextView(this).apply {
+                text = "📋 سجل مراقبة الملفات والأحداث:"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 10f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dpToPx(2), 0, dpToPx(4))
+            }
+            expandedLayout.addView(logsTitle)
+
+            val logsScrollView = ScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dpToPx(70)
+                ).apply {
+                    setMargins(0, 0, 0, dpToPx(8))
+                }
+                background = createRoundedDrawable("#09081A", 8f)
+                setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            }
+
+            val logsContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            logsScrollView.addView(logsContainer)
+            expandedLayout.addView(logsScrollView)
+
+            // Start listening to Flow of database logs
+            serviceScope.launch {
+                database.dao().getAllLogs().collect { logsList ->
+                    val recentLogs = logsList.take(5)
+                    withContext(Dispatchers.Main) {
+                        logsContainer.removeAllViews()
+                        if (recentLogs.isEmpty()) {
+                            val emptyTxt = TextView(this@GoldenBubbleService).apply {
+                                text = "لا توجد سجلات بعد."
+                                setTextColor(Color.parseColor("#64748B"))
+                                textSize = 9f
+                                gravity = Gravity.CENTER
+                                setPadding(0, dpToPx(16), 0, dpToPx(16))
+                            }
+                            logsContainer.addView(emptyTxt)
+                        } else {
+                            for (log in recentLogs) {
+                                val logRow = LinearLayout(this@GoldenBubbleService).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    gravity = Gravity.CENTER_VERTICAL
+                                    setPadding(0, dpToPx(2), 0, dpToPx(2))
+                                    layoutParams = LinearLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.WRAP_CONTENT
+                                    )
+                                }
+                                
+                                val iconTxt = TextView(this@GoldenBubbleService).apply {
+                                    text = when (log.type.lowercase()) {
+                                        "builder" -> "📄"
+                                        "executor" -> "⚙️"
+                                        "treedoc" -> "📁"
+                                        "gemini" -> "🧠"
+                                        else -> "⚠️"
+                                    }
+                                    textSize = 11f
+                                    setPadding(0, 0, dpToPx(4), 0)
+                                }
+                                logRow.addView(iconTxt)
+                                
+                                val contentLayout = LinearLayout(this@GoldenBubbleService).apply {
+                                    orientation = LinearLayout.VERTICAL
+                                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                                }
+                                
+                                val msgTxt = TextView(this@GoldenBubbleService).apply {
+                                    text = log.message
+                                    setTextColor(Color.parseColor("#E2E8F0"))
+                                    textSize = 9.5f
+                                    maxLines = 1
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
+                                }
+                                contentLayout.addView(msgTxt)
+                                
+                                val timeTxt = TextView(this@GoldenBubbleService).apply {
+                                    text = getRelativeTimeString(log.timestamp)
+                                    setTextColor(Color.parseColor("#64748B"))
+                                    textSize = 8f
+                                    gravity = Gravity.LEFT
+                                }
+                                contentLayout.addView(timeTxt)
+                                
+                                logRow.addView(contentLayout)
+                                logsContainer.addView(logRow)
+                            }
+                        }
+                    }
+                }
+            }
 
             // Central button to process Clipboard immediately manually
             val triggerBtn = Button(this).apply {
@@ -431,11 +557,32 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                     manualCollectClipboard()
                 }
                 val tbParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
-                    setMargins(0, 0, 0, dpToPx(8))
+                    setMargins(0, 0, 0, dpToPx(6))
                 }
                 layoutParams = tbParams
             }
             expandedLayout.addView(triggerBtn)
+
+            // Keyboard Toggle Button
+            val keyboardBtn = Button(this).apply {
+                text = "⌨️ تبديل لوحة المفاتيح"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 11f
+                background = createRoundedDrawable("#1E1D3A", 8f, "#FFD700", 1)
+                setOnClickListener {
+                    try {
+                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showInputMethodPicker()
+                    } catch (e: Exception) {
+                        Toast.makeText(applicationContext, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                val ksbParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
+                    setMargins(0, 0, 0, dpToPx(8))
+                }
+                layoutParams = ksbParams
+            }
+            expandedLayout.addView(keyboardBtn)
 
             // Actions panel buttons Row (Toggle pause, stop entire service)
             val actionsRow = LinearLayout(this).apply {
@@ -564,7 +711,7 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                     val text = clipData.getItemAt(0).text?.toString() ?: ""
                     if (text.isNotBlank()) {
                         Toast.makeText(applicationContext, "🔄 جاري معالجة النص يدوياً...", Toast.LENGTH_SHORT).show()
-                        processClipboardContent(text)
+                        processClipboardContent(text, force = true)
                     } else {
                         Toast.makeText(applicationContext, "الحافظة فارغة بالكامل.", Toast.LENGTH_SHORT).show()
                     }

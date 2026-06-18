@@ -81,6 +81,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Auto-start Golden Bubble Service V2 if overlay permission is granted
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this)) {
+            try {
+                startService(Intent(this, com.example.service.GoldenBubbleService::class.java))
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to auto-start GoldenBubbleService: ${e.message}")
+            }
+        }
+        
         // Dynamic orientation support and status bar adjustment
         setContent {
             MyApplicationTheme {
@@ -137,6 +146,11 @@ fun MainAppContent(
     val context = LocalContext.current
     var currentTab by remember { mutableStateOf(MainTab.MONITOR) }
     val scope = rememberCoroutineScope()
+
+    val sharedPrefs = remember(context) { context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE) }
+    var showBubbleTutorial by remember {
+        mutableStateOf(!sharedPrefs.getBoolean("has_seen_bubble_tutorial", false))
+    }
 
     // Permissions State variables
     var showPermissionDialog by remember { mutableStateOf(false) }
@@ -339,6 +353,64 @@ fun MainAppContent(
                             ) {
                                 Text("السماح بالوصول", fontWeight = FontWeight.Bold)
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showBubbleTutorial) {
+            Dialog(
+                onDismissRequest = {
+                    showBubbleTutorial = false
+                    sharedPrefs.edit().putBoolean("has_seen_bubble_tutorial", true).apply()
+                }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.92f)
+                        .background(Color(0xFF16152B), RoundedCornerShape(26.dp))
+                        .border(1.5.dp, Brush.linearGradient(listOf(MetallicGold, BrightGold)), RoundedCornerShape(26.dp))
+                        .padding(24.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "👑 الفقاعة الذهبية V2",
+                            color = BrightGold,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        
+                        Text(
+                            text = "مرحباً بك في الفقاعة الذهبية V2، رفيقك الذكي الدائم:\n\n• يمكنك سحب الفقاعة وتكبيرها/تصغيرها بأي مكان على الشاشة.\n• تقوم بنسخ وقراءة الحافظة وتوليد الملفات آلياً فوق أي تطبيق دون الحاجة للكيبورد.\n• يتيح لك الزر إمكانية تبديل لوحة المفاتيح بسرعة وبدون أي تعقيد بضغطة واحدة.",
+                            color = TextSilver,
+                            fontSize = 13.sp,
+                            lineHeight = 21.sp,
+                            textAlign = TextAlign.Right
+                        )
+                        
+                        Button(
+                            onClick = {
+                                showBubbleTutorial = false
+                                sharedPrefs.edit().putBoolean("has_seen_bubble_tutorial", true).apply()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BrightGold,
+                                contentColor = SlateBg
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth(0.85f)
+                        ) {
+                            Text(
+                                text = "فهمت، ابدأ الآن!",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
