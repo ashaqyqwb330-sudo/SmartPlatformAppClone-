@@ -11,6 +11,14 @@ object SmartCaptureEngine {
      * Formats, classifies, and saves captured plain text or HTML into structured project files.
      */
     fun processCapturedText(text: String, context: CommandContext): String {
+        val trimmed = text.trim()
+        val textHash = trimmed.hashCode().toString()
+        val sp = context.context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE)
+        val lastHash = sp.getString("last_processed_text_hash", null)
+        if (textHash == lastHash) {
+            return "تجاهل نص مكرر"
+        }
+
         val mode = SmartContentDetector.detectContentMode(text)
         val type = SmartTypeDetector.detectType(text)
         
@@ -22,8 +30,11 @@ object SmartCaptureEngine {
             else -> "SmartInbox"
         }
         
-        val rawFileName = cleanFileName(text)
-        val fileName = if (rawFileName.length > 50) rawFileName.substring(0, 50) else rawFileName
+        val rawFileName = extractCleanTitle(text)
+        var fileName = if (rawFileName.length > 50) rawFileName.substring(0, 50).trim() else rawFileName
+        if (fileName.length < 5) {
+            fileName = "مستند غير معنون"
+        }
         
         // Wrap with template if CONVERT mode is indicated
         val htmlContent = if (mode == "INDEX_ONLY") {
@@ -40,27 +51,43 @@ object SmartCaptureEngine {
             val targetFile = File(targetDir, "$fileName.html")
             targetFile.writeText(htmlContent, Charsets.UTF_8)
             
+            // Successfully processed, save current text hash for deduplication
+            sp.edit().putString("last_processed_text_hash", textHash).apply()
+            
             return "✅ تم حفظ '$fileName' في مجلد '$folderName'"
         } catch (e: Exception) {
             return "❌ فشل حفظ الملف الملتقط ذكياً: ${e.message}"
         }
     }
     
-    private fun cleanFileName(text: String): String {
+    private fun extractCleanTitle(text: String): String {
         // Strip HTML tags if any to isolate textual content
-        val stripped = text.replace(Regex("<[^>]*>"), "")
-        val singleLine = stripped.replace("\n", " ").replace("\r", " ").trim()
-        var safeName = singleLine.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+        val stripped = text.replace(Regex("<[^>]*>"), " ")
+        val singleLine = stripped.replace(Regex("[\\n\\r]+"), " ")
         
-        // Restrict duplicate or stray underscores
-        safeName = safeName.replace(Regex("_+"), "_")
-        if (safeName.startsWith("_")) safeName = safeName.substring(1)
-        if (safeName.endsWith("_")) safeName = safeName.substring(0, safeName.length - 1)
+        // Clean words that look like system paths: storage, emulated, 0, data, user, files
+        val pathWords = setOf("storage", "emulated", "0", "data", "user", "files")
         
-        if (safeName.isBlank()) {
-            safeName = "captured_content_${System.currentTimeMillis()}"
+        // Split text by non-alphanumeric whitespace but keep readable terms
+        val wordsAndNumbers = singleLine.split(Regex("\\s+"))
+        val filterWords = wordsAndNumbers.filter { word ->
+            val lower = word.lowercase(Locale.ROOT)
+            lower.isNotEmpty() && lower !in pathWords
         }
-        return safeName
+        
+        var title = filterWords.joinToString(" ").trim()
+        
+        // Replace special filesystem chars with spaces so they don't break directory creation
+        title = title.replace(Regex("[\\\\/:*?\"<>|]"), " ")
+        
+        // Replace multiple spaces with a single space and trim
+        title = title.replace(Regex("\\s+"), " ").trim()
+        
+        if (title.length < 5) {
+            return "مستند غير معنون"
+        }
+        
+        return title
     }
     
     private fun generateHtmlWrapper(title: String, category: String, content: String): String {
