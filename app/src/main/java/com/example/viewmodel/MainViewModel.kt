@@ -211,6 +211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 var buildersCount = 0
                 var executorsCount = 0
                 var treedocCount = 0
+                var smartCapturesCount = 0
 
                 for (res in results) {
                     when (res.type) {
@@ -258,10 +259,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                             _treedocReport.value = res.data?.get("report") ?: ""
                         }
+                        "smart_capture" -> {
+                            smartCapturesCount++
+                            database.dao().insertLog(
+                                LogEntity(
+                                    type = "smart_capture",
+                                    message = "التقاط ذكي للمحتوى",
+                                    details = res.message
+                                )
+                            )
+                        }
                     }
                 }
 
-                val summary = "معالجة يدوية ناجحة: تم إنشاء $buildersCount ملفات، تنفيذ $executorsCount كتل أوامر، وتوليد $treedocCount كشوفات."
+                val summaryList = mutableListOf<String>()
+                if (buildersCount > 0) summaryList.add("تم إنشاء $buildersCount ملفات")
+                if (executorsCount > 0) summaryList.add("تنفيذ $executorsCount كتل أوامر")
+                if (treedocCount > 0) summaryList.add("توليد $treedocCount كشوفات")
+                if (smartCapturesCount > 0) summaryList.add("حفظ $smartCapturesCount نصوص بالالتقاط الذكي")
+
+                val summary = "معالجة يدوية ناجحة: " + if (summaryList.isEmpty()) "لا عمليات مدخلة" else summaryList.joinToString("، ") + "."
                 insertSystemLog("نجاح المعالجة اليدوية", summary)
                 viewModelScope.launch(Dispatchers.Main) {
                     onFinished("✅ نجحت معالجة التوجيهات بنجاح!\n\n$summary")

@@ -426,6 +426,24 @@ class BuilderEngine(
         val hasExecutor = lines.any { isExecutorLine(it, ePrefixes) }
         val hasTreedoc = lines.any { isTreedocLine(it, tPrefixes) }
 
+        // Smart Capture Engine Integration - Phase 1
+        if (!hasBuilder && !hasExecutor && !hasTreedoc && text.isNotBlank()) {
+            val prefs = context.getSharedPreferences("SmartCapturePrefs", Context.MODE_PRIVATE)
+            val smartEnabled = prefs.getBoolean("smart_capture_enabled", false)
+            if (smartEnabled) {
+                val scContext = CommandContext(
+                    context = context,
+                    baseDir = getBaseDirForPrefix(""),
+                    args = emptyMap(),
+                    flags = emptyList()
+                )
+                val msg = SmartCaptureEngine.processCapturedText(text, scContext)
+                results.add(ProcessResult("smart_capture", msg))
+                log("🧠 [SmartCapture] $msg")
+                return@withContext results
+            }
+        }
+
         // 1. معالجة @builder
         if (hasBuilder) {
             log("🔍 اكتشاف توجيهات @builder...")

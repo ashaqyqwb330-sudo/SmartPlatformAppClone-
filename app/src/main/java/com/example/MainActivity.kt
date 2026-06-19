@@ -2772,6 +2772,44 @@ fun SettingsScreen(
             }
         }
 
+        // Smart Capture Toggle Card
+        item {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val prefs = remember { context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE) }
+            val smartCaptureEnabled = remember { 
+                androidx.compose.runtime.mutableStateOf(prefs.getBoolean("smart_capture_enabled", false)) 
+            }
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("الالتقاط الذكي للنصوص", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("تحليل النصوص المنسوخة التي لا تحتوي على توجيهات، تصنيف نوعها تلقائياً وحفظها في مجلدات مخصصة", color = TextGray, fontSize = 10.sp)
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Switch(
+                        checked = smartCaptureEnabled.value,
+                        onCheckedChange = { isChecked ->
+                            smartCaptureEnabled.value = isChecked
+                            prefs.edit().putBoolean("smart_capture_enabled", isChecked).apply()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = SlateBg,
+                            checkedTrackColor = MetallicGold,
+                            uncheckedThumbColor = TextGray,
+                            uncheckedTrackColor = GlassWhite
+                        ),
+                        modifier = Modifier.testTag("smart_capture_enabled_switch")
+                    )
+                }
+            }
+        }
+
         // Clear Clipboard Option Tag Toggle
         item {
             val clearClipEnabled = viewModel.clearClipAfterSave.collectAsState().value
