@@ -8,10 +8,16 @@ import java.util.Locale
 object SmartCaptureEngine {
 
     /**
-     * Formats, classifies, and saves captured plain text or HTML into structured project files.
+     * Formats, classifies, and saves captured plain text, code, or HTML into structured project files.
      */
     fun processCapturedText(text: String, context: CommandContext): String {
+        // 1. تجاهل JSON
         val trimmed = text.trim()
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            return "تجاهل JSON خام"
+        }
+
+        // Checking deduplication hash on whole text
         val textHash = trimmed.hashCode().toString()
         val sp = context.context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE)
         val lastHash = sp.getString("last_processed_text_hash", null)
@@ -19,77 +25,274 @@ object SmartCaptureEngine {
             return "تجاهل نص مكرر"
         }
 
-        val mode = SmartContentDetector.detectContentMode(text)
-        val type = SmartTypeDetector.detectType(text)
-        
-        // Suggest folder based on type
-        val folderName = when (type) {
-            "عملي" -> "دروس عملية"
-            "نظري" -> "دروس نظرية"
-            "دليل مرئي" -> "أدلة مرئية"
-            else -> "SmartInbox"
-        }
-        
-        val rawFileName = extractCleanTitle(text)
-        var fileName = if (rawFileName.length > 50) rawFileName.substring(0, 50).trim() else rawFileName
-        if (fileName.length < 5) {
-            fileName = "مستند غير معنون"
-        }
-        
-        // Wrap with template if CONVERT mode is indicated
-        val htmlContent = if (mode == "INDEX_ONLY") {
-            text
-        } else {
-            generateHtmlWrapper(fileName, type, text)
-        }
-        
-        try {
-            val targetDir = File(context.baseDir, folderName)
-            if (!targetDir.exists()) {
-                targetDir.mkdirs()
+        // 2. فكك النص
+        val blocks = decomposeText(text)
+        val results = mutableListOf<String>()
+
+        for (block in blocks) {
+            if (block.content.isBlank()) continue
+            
+            when (block.type) {
+                ContentType.CODE -> {
+                    val ext = languageToExtension(block.language)
+                    if (ext == "html") {
+                        // CODE HTML
+                        val title = extractSmartTitle(block)
+                        val targetDir = File(context.baseDir, "SmartInbox")
+                        val targetFile = getUniqueFile(targetDir, title, "html")
+                        val saved = saveFile(targetFile, block.content)
+                        if (saved) {
+                            results.add("✅ تم حفظ '$title'")
+                        } else {
+                            results.add("❌ فشل حفظ '$title'")
+                        }
+                    } else {
+                        // CODE programming
+                        val codeTitleWithExt = extractCodeTitle(block.language)
+                        val baseName = codeTitleWithExt.substringBeforeLast(".")
+                        val targetDir = File(context.baseDir, "SmartInbox/code")
+                        val targetFile = getUniqueFile(targetDir, baseName, ext)
+                        val saved = saveFile(targetFile, block.content)
+                        if (saved) {
+                            results.add("✅ تم حفظ '${targetFile.name}'")
+                        } else {
+                            results.add("❌ فشل حفظ '${targetFile.name}'")
+                        }
+                    }
+                }
+                ContentType.HTML -> {
+                    // IndexOnlyMode: حفظ كما هو.
+                    val title = extractSmartTitle(block)
+                    val targetDir = File(context.baseDir, "SmartInbox")
+                    val targetFile = getUniqueFile(targetDir, title, "html")
+                    val saved = saveFile(targetFile, block.content)
+                    if (saved) {
+                        results.add("✅ تم حفظ '$title'")
+                    } else {
+                        results.add("❌ فشل حفظ '$title'")
+                    }
+                }
+                ContentType.TEXT -> {
+                    // ConvertMode: تطبيق قالب HTML ثم حفظ.
+                    val title = extractSmartTitle(block)
+                    val htmlContent = generateHtmlWrapper(title, "نص", block.content)
+                    val targetDir = File(context.baseDir, "SmartInbox")
+                    val targetFile = getUniqueFile(targetDir, title, "html")
+                    val saved = saveFile(targetFile, htmlContent)
+                    if (saved) {
+                        results.add("✅ تم تحويل وحفظ '$title'")
+                    } else {
+                        results.add("❌ فشل تحويل وحفظ '$title'")
+                    }
+                }
             }
-            val targetFile = File(targetDir, "$fileName.html")
-            targetFile.writeText(htmlContent, Charsets.UTF_8)
-            
-            // Successfully processed, save current text hash for deduplication
+        }
+
+        // Save current text hash for deduplication if we successfully saved anything
+        if (results.any { it.startsWith("✅") }) {
             sp.edit().putString("last_processed_text_hash", textHash).apply()
-            
-            return "✅ تم حفظ '$fileName' في مجلد '$folderName'"
-        } catch (e: Exception) {
-            return "❌ فشل حفظ الملف الملتقط ذكياً: ${e.message}"
         }
+
+        return "تمت معالجة ${blocks.size} كتل: ${results.joinToString(" | ")}"
     }
-    
-    private fun extractCleanTitle(text: String): String {
-        // Strip HTML tags if any to isolate textual content
-        val stripped = text.replace(Regex("<[^>]*>"), " ")
-        val singleLine = stripped.replace(Regex("[\\n\\r]+"), " ")
-        
-        // Clean words that look like system paths: storage, emulated, 0, data, user, files
-        val pathWords = setOf("storage", "emulated", "0", "data", "user", "files")
-        
-        // Split text by non-alphanumeric whitespace but keep readable terms
-        val wordsAndNumbers = singleLine.split(Regex("\\s+"))
-        val filterWords = wordsAndNumbers.filter { word ->
-            val lower = word.lowercase(Locale.ROOT)
-            lower.isNotEmpty() && lower !in pathWords
+
+    /**
+     * Decomposes the given text into structured blocks of CODE, HTML, or TEXT.
+     */
+    fun decomposeText(text: String): List<ContentBlock> {
+        val blocks = mutableListOf<ContentBlock>()
+        // Match code blocks delimited by three backticks, supporting optional language specifier
+        val regex = """```(\w*)[\r\n]*([\s\S]*?)```""".toRegex()
+        var lastIndex = 0
+
+        for (match in regex.findAll(text)) {
+            val range = match.range
+            val prefix = text.substring(lastIndex, range.first)
+            if (prefix.isNotBlank()) {
+                val prefixType = if (isHtmlBlock(prefix)) {
+                    ContentType.HTML
+                } else {
+                    ContentType.TEXT
+                }
+                blocks.add(ContentBlock(prefixType, prefix))
+            }
+            // Code block
+            val lang = match.groupValues[1].trim()
+            val language = if (lang.isEmpty()) "text" else lang
+            val codeBody = match.groupValues[2]
+            blocks.add(ContentBlock(ContentType.CODE, codeBody, language))
+            lastIndex = range.last + 1
         }
-        
-        var title = filterWords.joinToString(" ").trim()
-        
-        // Replace special filesystem chars with spaces so they don't break directory creation
-        title = title.replace(Regex("[\\\\/:*?\"<>|]"), " ")
-        
-        // Replace multiple spaces with a single space and trim
-        title = title.replace(Regex("\\s+"), " ").trim()
-        
-        if (title.length < 5) {
-            return "مستند غير معنون"
+
+        if (lastIndex < text.length) {
+            val suffix = text.substring(lastIndex)
+            if (suffix.isNotBlank()) {
+                val suffixType = if (isHtmlBlock(suffix)) {
+                    ContentType.HTML
+                } else {
+                    ContentType.TEXT
+                }
+                blocks.add(ContentBlock(suffixType, suffix))
+            }
         }
-        
+        return blocks
+    }
+
+    private fun isHtmlBlock(text: String): Boolean {
+        val trimmedLower = text.trim().lowercase(Locale.ROOT)
+        return trimmedLower.startsWith("<html") ||
+               trimmedLower.startsWith("<body") ||
+               trimmedLower.startsWith("<head") ||
+               trimmedLower.startsWith("<div") ||
+               trimmedLower.startsWith("<table")
+    }
+
+    /**
+     * Extracts a descriptive title for a parsed block.
+     */
+    fun extractSmartTitle(block: ContentBlock): String {
+        var rawTitle = ""
+        val isHtmlLike = block.type == ContentType.HTML || 
+                         (block.type == ContentType.CODE && block.language.lowercase(Locale.ROOT) == "html")
+
+        if (isHtmlLike) {
+            val titleRegex = """<title>([\s\S]*?)</title>""".toRegex(RegexOption.IGNORE_CASE)
+            val h1Regex = """<h1>([\s\S]*?)</h1>""".toRegex(RegexOption.IGNORE_CASE)
+
+            val titleMatch = titleRegex.find(block.content)
+            if (titleMatch != null) {
+                rawTitle = titleMatch.groupValues[1]
+            } else {
+                val h1Match = h1Regex.find(block.content)
+                if (h1Match != null) {
+                    rawTitle = h1Match.groupValues[1]
+                }
+            }
+        }
+
+        if (rawTitle.isBlank()) {
+            rawTitle = block.content
+        }
+
+        val cleaned = sanitizeFileName(rawTitle)
+        var title = if (cleaned.length > 50) cleaned.substring(0, 50).trim() else cleaned
+
+        if (title.length < 3 || title == "مستند_غير_معنون") {
+            title = if (isHtmlLike) "صفحة_ويب" else "مستند_غير_معنون"
+        }
         return title
     }
-    
+
+    /**
+     * Translates the programming language of a code block to its appropriate file extension.
+     */
+    fun languageToExtension(language: String): String {
+        return when (language.lowercase(Locale.ROOT).trim()) {
+            "python", "py" -> "py"
+            "java" -> "java"
+            "kotlin", "kt" -> "kt"
+            "javascript", "js" -> "js"
+            "json" -> "json"
+            "xml" -> "xml"
+            "html" -> "html"
+            else -> "txt"
+        }
+    }
+
+    /**
+     * Generates a code filename for coding snippets.
+     */
+    fun extractCodeTitle(language: String): String {
+        val ext = languageToExtension(language)
+        return "code_snippet.$ext"
+    }
+
+    /**
+     * Sanitizes file names to meet clean structured naming guidelines.
+     */
+    fun sanitizeFileName(raw: String): String {
+        // Strip HTML tags first to isolate text representation
+        var name = raw.replace(Regex("<[^>]*>"), " ")
+
+        // 1. إزالة رموز Markdown من البداية
+        var temp = name.trim()
+        var changed = true
+        while (changed) {
+            changed = false
+            if (temp.startsWith("##")) {
+                temp = temp.substring(2).trim()
+                changed = true
+            }
+            if (temp.startsWith("**")) {
+                temp = temp.substring(2).trim()
+                changed = true
+            }
+            if (temp.startsWith("---")) {
+                temp = temp.substring(3).trim()
+                changed = true
+            }
+            if (temp.startsWith("```")) {
+                temp = temp.substring(3).trim()
+                changed = true
+            }
+        }
+        name = temp
+
+        // 2. إزالة الكلمات التي تشبه مسارات النظام
+        val pathWords = setOf("storage", "emulated", "0", "data", "user", "files")
+        val words = name.split(Regex("\\s+"))
+        val filteredWords = words.filter { word ->
+            word.lowercase(Locale.ROOT) !in pathWords
+        }
+        name = filteredWords.joinToString(" ")
+
+        // Replace filesystem incompatible characters
+        name = name.replace(Regex("[\\\\/:*?\"<>|]"), " ")
+
+        // 3. دمج المسافات المتعددة في مسافة واحدة وإزالة المسافات الزائدة من الأطراف
+        name = name.replace(Regex("\\s+"), " ").trim()
+
+        // 4. إذا كان الاسم الناتج أقصر من 3 أحرف، استخدم "مستند_غير_معنون"
+        if (name.length < 3) {
+            name = "مستند_غير_معنون"
+        }
+        return name
+    }
+
+    /**
+     * Finds a unique unused filename to prevent overwriting existing files.
+     */
+    fun getUniqueFile(parentDir: File, baseName: String, extension: String): File {
+        if (!parentDir.exists()) {
+            parentDir.mkdirs()
+        }
+        var file = File(parentDir, "$baseName.$extension")
+        if (!file.exists()) {
+            return file
+        }
+        var counter = 1
+        while (true) {
+            file = File(parentDir, "${baseName}_$counter.$extension")
+            if (!file.exists()) {
+                return file
+            }
+            counter++
+        }
+    }
+
+    private fun saveFile(path: File, content: String): Boolean {
+        return try {
+            val parent = path.parentFile
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs()
+            }
+            path.writeText(content, Charsets.UTF_8)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun generateHtmlWrapper(title: String, category: String, content: String): String {
         val dateStr = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date())
         return """
