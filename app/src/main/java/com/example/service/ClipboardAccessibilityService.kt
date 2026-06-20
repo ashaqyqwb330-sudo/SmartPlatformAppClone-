@@ -202,7 +202,10 @@ class ClipboardAccessibilityService : AccessibilityService() {
         val lastProcessed = sharedPrefs.getString("last_auto_processed_text", "") ?: ""
         if (text == lastProcessed) return
 
-        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:")) {
+        val smartPrefs = getSharedPreferences("SmartCapturePrefs", Context.MODE_PRIVATE)
+        val smartEnabled = smartPrefs.getBoolean("smart_capture_enabled", false)
+
+        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:") || smartEnabled) {
             processCopiedText(text)
         } else {
             // No saved directives found. Only show Toast if text is long enough (e.g. >= 8 chars) to avoid spamming tiny copy-paste

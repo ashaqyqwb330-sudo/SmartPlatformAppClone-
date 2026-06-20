@@ -437,9 +437,62 @@ class BuilderEngine(
                     args = emptyMap(),
                     flags = emptyList()
                 )
-                val msg = SmartCaptureEngine.processCapturedText(text, scContext)
-                results.add(ProcessResult("smart_capture", msg))
-                log("🧠 [SmartCapture] $msg")
+                val captureResult = SmartCaptureEngine.processCapturedText(text, scContext)
+                
+                val msgBuilder = java.lang.StringBuilder()
+                if (captureResult.savedFiles.isNotEmpty()) {
+                    val fileNames = captureResult.savedFiles.map { it.fileName }.joinToString("، ")
+                    msgBuilder.append("حفظ: $fileNames")
+                    
+                    val db = com.example.db.AppDatabase.getDatabase(context)
+                    for (fileInfo in captureResult.savedFiles) {
+                        try {
+                            db.dao().insertFile(
+                                com.example.db.FileEntity(
+                                    path = "SmartInbox/" + fileInfo.fileName, 
+                                    fullPath = fileInfo.filePath, 
+                                    size = java.io.File(fileInfo.filePath).length(), 
+                                    mode = "w"
+                                )
+                            )
+                            db.dao().insertLog(
+                                com.example.db.LogEntity(
+                                    type = "smart_capture", 
+                                    message = "التقاط ذكي: تم حفظ ${fileInfo.fileName}", 
+                                    details = "المسار: ${fileInfo.filePath}"
+                                )
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.e("BuilderEngine", "Error saving files: ${e.message}")
+                        }
+                    }
+                } else {
+                    if (captureResult.ignoredDuplicates > 0) {
+                        msgBuilder.append("تجاهل نص مكرر")
+                    } else if (captureResult.ignoredShortTexts > 0) {
+                        msgBuilder.append("تجاهل نص قصير جداً")
+                    } else {
+                        msgBuilder.append("لا يوجد محتوى صالح للالتقاط")
+                    }
+                }
+                
+                if (captureResult.errors.isNotEmpty()) {
+                    msgBuilder.append(" | أخطاء: ").append(captureResult.errors.joinToString("، "))
+                }
+                
+                val finalMsg = msgBuilder.toString()
+                results.add(ProcessResult("smart_capture", finalMsg))
+                log("🧠 [SmartCapture] $finalMsg")
+                
+                // Broadcast for the bubble to refresh or display detail
+                val intent = Intent("com.example.ACTION_SMART_CAPTURE_COMPLETED")
+                intent.putExtra("serialized_result_size", captureResult.savedFiles.size)
+                if (captureResult.savedFiles.isNotEmpty()) {
+                    intent.putExtra("last_saved_name", captureResult.savedFiles.first().fileName)
+                    intent.putExtra("last_saved_path", captureResult.savedFiles.first().filePath)
+                }
+                context.sendBroadcast(intent)
+                
                 return@withContext results
             }
         }

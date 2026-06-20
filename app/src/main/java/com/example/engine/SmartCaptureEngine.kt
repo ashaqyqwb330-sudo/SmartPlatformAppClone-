@@ -10,121 +10,213 @@ object SmartCaptureEngine {
     /**
      * Formats, classifies, and saves captured plain text, code, or HTML into structured project files.
      */
-    fun processCapturedText(text: String, context: CommandContext): String {
-        // 1. تجاهل JSON
-        val trimmed = text.trim()
-        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-            return "تجاهل JSON خام"
+    fun getThemeFolder(theme: String): String {
+        return when(theme.lowercase(Locale.ROOT)) {
+            "dark" -> "dark"
+            "light" -> "light"
+            "academic" -> "academic"
+            "oasis" -> "oasis"
+            "space" -> "space"
+            else -> theme
         }
+    }
 
-        // Checking deduplication hash on whole text
-        val textHash = trimmed.hashCode().toString()
+    fun getThemeDisplayName(theme: String): String {
+        return when(theme.lowercase(Locale.ROOT)) {
+            "dark" -> "داكن ذهبي"
+            "light" -> "فاتح نيون"
+            "academic" -> "أكاديمي عتيق"
+            "oasis" -> "واحة هادئة"
+            "space" -> "سديم فضائي"
+            else -> theme
+        }
+    }
+
+    fun generatePreviewHtml(theme: String, context: android.content.Context): String {
+        val prefs = context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE)
+        val customCss = prefs.getString("custom_css", "") ?: ""
+        val demoMarkdown = """
+            # عنوان المعاينة الحية للنمط المختار
+            أهلاً بك في المعاينة الفاخرة لسمات الالتقاط الذكي. هذا النص التجريبي يوضح لك كيف سيتم تنسيق نصوص الحافظة وعرضها.
+            
+            > "سرعة الإنجاز والجمال التصميمي يجتمعان معاً في محرك الالتقاط الذكي الفاخر." — سمارت كابتشر
+            
+            ### الدعم والتوافق الممتاز:
+            * **السمات الديناميكية**: داكن، فاتح، أكاديمي، واحة طبيعية، وفضاء عميق.
+            * **الصياغات المدعومة**: الجداول، الاقتباسات، العناوين، الأكواد البرمجية، والروابط.
+            
+            | ميزة النمط | التوفر | الحالة |
+            | :--- | :---: | :---: |
+            | استجابة Edge-to-Edge | متاح | ⚡ نشط |
+            | خطوط عربية فاخرة | مفعّل تلقائياً | 💎 رائع |
+            | تخصيص CSS يدوي | مدعوم بالكامل | 🛠️ متاح |
+            
+            يمكنك كتابة كود CSS مخصص في الإعدادات وسيتم حقنه وتطبيقه فوراً على مستنداتك!
+            `val result = SmartCaptureEngine.generatePreviewHtml(theme)`
+        """.trimIndent()
+        
+        var wrapped = generateHtmlWrapper("معاينة النمط: " + getThemeDisplayName(theme), "توضيحي", demoMarkdown, theme)
+        if (customCss.isNotBlank()) {
+            val insertIdx = wrapped.indexOf("</style>")
+            if (insertIdx != -1) {
+                wrapped = wrapped.substring(0, insertIdx) + "\n/* Custom CSS */\n" + customCss + "\n" + wrapped.substring(insertIdx)
+            }
+        }
+        return wrapped
+    }
+
+    fun processCapturedText(text: String, context: CommandContext): CaptureResult {
+        val trimmed = text.trim()
         val sp = context.context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE)
+        
+        // 1. قراءة خيارات التحكم الفاخرة
+        val saveAllTexts = sp.getBoolean("save_all_texts", false)
+        val ignoreShortTexts = sp.getBoolean("ignore_short_texts", true)
+        val applyAllThemes = sp.getBoolean("apply_all_themes", false)
+        
+        val activeThemesStr = sp.getString("active_themes_csv", "dark,light,academic,oasis,space") ?: "dark,light,academic,oasis,space"
+        val activeThemes = activeThemesStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        
+        val customCss = sp.getString("custom_css", "") ?: ""
+        
+        val savedFiles = mutableListOf<SavedFileInfo>()
+        val errors = mutableListOf<String>()
+        var ignoredShortTextsVal = 0
+        var ignoredDuplicates = 0
+        
+        // التحقق من التكرار
+        val textHash = trimmed.hashCode().toString()
         val lastHash = sp.getString("last_processed_text_hash", null)
         if (textHash == lastHash) {
-            return "تجاهل نص مكرر"
+            return CaptureResult(
+                ignoredDuplicates = 1
+            )
         }
-
-        // Read selected document theme from SharedPreferences
-        val chosenTheme = sp.getString("document_theme", "dark") ?: "dark"
-
-        // 2. فكك النص
-        val blocks = decomposeText(text)
-        val results = mutableListOf<String>()
         
-        var textsSaved = 0
-        var codesSaved = 0
-
-        for (block in blocks) {
+        // تجاهل JSON ما لم يكن حفظ كل النصوص مفعلاً
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            if (!saveAllTexts) {
+                return CaptureResult(ignoredDuplicates = 0)
+            }
+        }
+        
+        // تفكيك النص في قوالب
+        val blocks = decomposeText(text)
+        
+        // إذا كان فارغاً ولكن هناك نص خام يراد حفظه قسراً
+        val finalBlocks = if (blocks.isEmpty() && trimmed.isNotBlank() && saveAllTexts) {
+            listOf(ContentBlock(ContentType.TEXT, trimmed))
+        } else if (blocks.isNotEmpty()) {
+            blocks
+        } else {
+            emptyList()
+        }
+        
+        val workingBlocks = if (saveAllTexts && finalBlocks.all { it.content.isBlank() }) {
+            listOf(ContentBlock(ContentType.TEXT, text))
+        } else {
+            finalBlocks
+        }
+        
+        for (block in workingBlocks) {
             if (block.content.isBlank()) continue
-
-            // 4. تجاهل النصوص القصيرة تلقائيًا (أقل من 20 حرفاً)
+            
             val trimmedBlockContent = block.content.trim()
-            if ((block.type == ContentType.TEXT || block.type == ContentType.HTML) && trimmedBlockContent.length < 20) {
-                results.add("⚠️ تجاهل نص قصير: '${trimmedBlockContent.take(15)}...'")
-                android.util.Log.d("SmartCaptureEngine", "تجاهل نص قصير جداً: '$trimmedBlockContent'")
+            
+            // تحقق من تحديد النصوص القصيرة جداً
+            val isShort = (block.type == ContentType.TEXT || block.type == ContentType.HTML) && trimmedBlockContent.length < 20
+            if (isShort && ignoreShortTexts && !saveAllTexts) {
+                ignoredShortTextsVal++
                 continue
+            }
+            
+            // تحديد عنوان ذكي مناسب للمستند
+            val extractedTitle = if (block.content.isNotBlank()) extractSmartTitle(block) else "untitled"
+            val title = if (extractedTitle.isBlank() || extractedTitle == "بدون عنوان") "untitled" else extractedTitle
+            
+            // تحديد القوالب النشطة المراد تطبيقها وحفظها
+            val themesToApply = if (applyAllThemes && block.type == ContentType.TEXT) {
+                activeThemes
+            } else {
+                listOf(sp.getString("document_theme", "dark") ?: "dark")
             }
             
             when (block.type) {
                 ContentType.CODE -> {
                     val ext = languageToExtension(block.language)
                     if (ext == "html") {
-                        // CODE HTML
-                        val title = extractSmartTitle(block)
                         val targetDir = File(context.baseDir, "SmartInbox")
                         val targetFile = getUniqueFile(targetDir, title, "html")
                         val saved = saveFile(targetFile, block.content)
                         if (saved) {
-                            textsSaved++
-                            results.add("✅ تم حفظ كود HTML كصفحة ويب: '$title'")
+                            savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "HTML"))
                         } else {
-                            results.add("❌ فشل حفظ كود HTML: '$title'")
+                            errors.add("فشل حفظ كود HTML: ${targetFile.name}")
                         }
                     } else {
-                        // CODE programming - Using the custom smart filename
                         val codeTitleWithExt = extractCodeTitle(block.content, block.language)
                         val baseName = codeTitleWithExt.substringBeforeLast(".")
                         val targetDir = File(context.baseDir, "SmartInbox/code")
                         val targetFile = getUniqueFile(targetDir, baseName, ext)
                         val saved = saveFile(targetFile, block.content)
                         if (saved) {
-                            codesSaved++
-                            results.add("✅ تم حفظ كود برمجي: '${targetFile.name}'")
+                            savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "CODE"))
                         } else {
-                            results.add("❌ فشل حفظ كود برمجي: '${targetFile.name}'")
+                            errors.add("فشل حفظ كود برمجي: ${targetFile.name}")
                         }
                     }
                 }
                 ContentType.HTML -> {
-                    // IndexOnlyMode: حفظ كما هو.
-                    val title = extractSmartTitle(block)
                     val targetDir = File(context.baseDir, "SmartInbox")
                     val targetFile = getUniqueFile(targetDir, title, "html")
                     val saved = saveFile(targetFile, block.content)
                     if (saved) {
-                        textsSaved++
-                        results.add("✅ تم حفظ صفحة ويب: '$title'")
+                        savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "HTML"))
                     } else {
-                        results.add("❌ فشل حفظ صفحة ويب: '$title'")
+                        errors.add("فشل حفظ صفحة ويب: ${targetFile.name}")
                     }
                 }
                 ContentType.TEXT -> {
-                    // ConvertMode: تطبيق قالب HTML محسن مع دعم Markdown ثم حفظ.
-                    val title = extractSmartTitle(block)
-                    val htmlContent = generateHtmlWrapper(title, "نص", block.content, chosenTheme)
-                    val targetDir = File(context.baseDir, "SmartInbox")
-                    val targetFile = getUniqueFile(targetDir, title, "html")
-                    val saved = saveFile(targetFile, htmlContent)
-                    if (saved) {
-                        textsSaved++
-                        results.add("✅ تم تحويل وحفظ مستند نصي: '$title'")
-                    } else {
-                        results.add("❌ فشل تحويل وحفظ مستند نصي: '$title'")
+                    for (themeId in themesToApply) {
+                        val targetSubdir = if (applyAllThemes) {
+                            val dirSubName = getThemeFolder(themeId)
+                            File(context.baseDir, "SmartInbox/$dirSubName")
+                        } else {
+                            File(context.baseDir, "SmartInbox")
+                        }
+                        
+                        var htmlContent = generateHtmlWrapper(title, "نص", block.content, themeId)
+                        // حقن الـ CSS المخصص إن وُجد
+                        if (customCss.isNotBlank()) {
+                            val insertIdx = htmlContent.indexOf("</style>")
+                            if (insertIdx != -1) {
+                                htmlContent = htmlContent.substring(0, insertIdx) + "\n/* Custom CSS */\n" + customCss + "\n" + htmlContent.substring(insertIdx)
+                            }
+                        }
+                        
+                        val targetFile = getUniqueFile(targetSubdir, title, "html")
+                        val saved = saveFile(targetFile, htmlContent)
+                        if (saved) {
+                            savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "HTML"))
+                        } else {
+                            errors.add("فشل تحويل مستند بالسمة ($themeId): ${targetFile.name}")
+                        }
                     }
                 }
             }
         }
-
-        // Detailed events log for the background event logger (Logcat)
-        android.util.Log.i("SmartCaptureEngine", "Smart Capture System Log: " + results.joinToString(" | "))
-
-        // Save current text hash for deduplication if we successfully saved anything
-        if (textsSaved > 0 || codesSaved > 0) {
+        
+        if (savedFiles.isNotEmpty()) {
             sp.edit().putString("last_processed_text_hash", textHash).apply()
-            
-            // 5. تحسين رسائل الفقاعة الذهبية (Concise response message)
-            val textPart = if (textsSaved > 0) "$textsSaved نصوص" else ""
-            val codePart = if (codesSaved > 0) "$codesSaved كود" else ""
-            val separator = if (textsSaved > 0 && codesSaved > 0) "، " else ""
-            return "✅ حفظ: ${textPart}${separator}${codePart} في SmartInbox"
         }
-
-        if (results.any { it.contains("تجاهل نص قصير") }) {
-            return "تجاهل نص قصير"
-        }
-
-        return "لا يوجد محتوى جديد للحفظ"
+        
+        return CaptureResult(
+            savedFiles = savedFiles,
+            ignoredCodes = 0, // Code ignoring is not active, but we keep counts for schema compliance
+            ignoredShortTexts = ignoredShortTextsVal,
+            ignoredDuplicates = if (textHash == lastHash) 1 else 0,
+            errors = errors
+        )
     }
 
     /**

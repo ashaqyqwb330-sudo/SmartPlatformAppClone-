@@ -66,6 +66,7 @@ class GoldenBubbleService : Service(), LifecycleOwner {
     private val handler = Handler(Looper.getMainLooper())
     private var lastKnownClipText = ""
     private var isPollingActive = false
+    private var lastSavedFilePath: String? = null
 
     private lateinit var statusCircle: View
     private lateinit var statusTxt: TextView
@@ -90,7 +91,7 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         database = AppDatabase.getDatabase(this)
         
-        // Register broadcast receiver for clipboard updates (Problem 1)
+        // Register broadcast receiver for clipboard updates & smart capture completions
         clipboardReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == "com.example.ACTION_CLIPBOARD_UPDATED") {
@@ -99,10 +100,20 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                         Log.d("GoldenBubbleService", "Received clipboard broadcast: size=${text.length}")
                         onClipboardTextDetected(text)
                     }
+                } else if (intent?.action == "com.example.ACTION_SMART_CAPTURE_COMPLETED") {
+                    val lastSavedName = intent.getStringExtra("last_saved_name") ?: ""
+                    val lastSavedPath = intent.getStringExtra("last_saved_path") ?: ""
+                    if (lastSavedPath.isNotEmpty()) {
+                        lastSavedFilePath = lastSavedPath
+                        updateLastActionText("💾 تم حفظ: $lastSavedName (انقر للمستند)")
+                    }
                 }
             }
         }
-        val filter = IntentFilter("com.example.ACTION_CLIPBOARD_UPDATED")
+        val filter = IntentFilter().apply {
+            addAction("com.example.ACTION_CLIPBOARD_UPDATED")
+            addAction("com.example.ACTION_SMART_CAPTURE_COMPLETED")
+        }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(clipboardReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -179,7 +190,10 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
         val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
 
-        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:")) {
+        val smartPrefs = getSharedPreferences("SmartCapturePrefs", Context.MODE_PRIVATE)
+        val smartEnabled = smartPrefs.getBoolean("smart_capture_enabled", false)
+
+        if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:") || smartEnabled) {
             processClipboardContent(text, force = false)
         }
     }
@@ -383,6 +397,17 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                 layoutParams = statusParams
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
+                setOnTouchListener { _, event ->
+                    if (event.action == android.view.MotionEvent.ACTION_UP) {
+                        val path = lastSavedFilePath
+                        if (path != null) {
+                            com.example.engine.FileUtils.openFile(this@GoldenBubbleService, path)
+                        } else {
+                            collapsedLayout.performClick()
+                        }
+                    }
+                    true
+                }
             }
             collapsedLayout.addView(bubbleStatusTxt)
 
@@ -598,6 +623,22 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                                 contentLayout.addView(timeTxt)
                                 
                                 logRow.addView(contentLayout)
+                                
+                                val typeLow = log.type.lowercase()
+                                if (typeLow == "smart_capture" || typeLow == "smart_capture" || typeLow == "builder") {
+                                    logRow.setOnClickListener {
+                                        var path = log.details ?: ""
+                                        if (path.startsWith("المسار: ")) {
+                                            path = path.removePrefix("المسار: ").trim()
+                                        } else if (path.startsWith("الملف: ")) {
+                                            path = path.removePrefix("الملف: ").trim()
+                                        }
+                                        if (path.isNotEmpty()) {
+                                            com.example.engine.FileUtils.openFile(this@GoldenBubbleService, path)
+                                        }
+                                    }
+                                }
+                                
                                 logsContainer.addView(logRow)
                             }
                         }

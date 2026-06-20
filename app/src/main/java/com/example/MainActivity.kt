@@ -2443,6 +2443,8 @@ fun SettingsScreen(
     
     var showDirBrowser by remember { mutableStateOf(false) }
     var showManualPermissionsDashboard by remember { mutableStateOf(false) }
+    var showPreviewDialog by remember { mutableStateOf(false) }
+    var previewThemeToUse by remember { mutableStateOf("dark") }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2772,45 +2774,361 @@ fun SettingsScreen(
             }
         }
 
-        // Smart Capture Toggle Card
+        // Smart Capture Master Toggle & Configurations Panel
         item {
             val context = androidx.compose.ui.platform.LocalContext.current
             val prefs = remember { context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE) }
             val smartCaptureEnabled = remember { 
                 androidx.compose.runtime.mutableStateOf(prefs.getBoolean("smart_capture_enabled", false)) 
             }
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("الالتقاط الذكي للنصوص", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        Text("تحليل النصوص المنسوخة التي لا تحتوي على توجيهات، تصنيف نوعها تلقائياً وحفظها في مجلدات مخصصة", color = TextGray, fontSize = 10.sp)
+            val saveAllTexts = remember { 
+                androidx.compose.runtime.mutableStateOf(prefs.getBoolean("save_all_texts", false)) 
+            }
+            val ignoreShortTexts = remember { 
+                androidx.compose.runtime.mutableStateOf(prefs.getBoolean("ignore_short_texts", true)) 
+            }
+            val applyAllThemes = remember { 
+                androidx.compose.runtime.mutableStateOf(prefs.getBoolean("apply_all_themes", false)) 
+            }
+            val customCss = remember { 
+                androidx.compose.runtime.mutableStateOf(prefs.getString("custom_css", "") ?: "") 
+            }
+            val activeThemesCsv = remember {
+                androidx.compose.runtime.mutableStateOf(prefs.getString("active_themes", "dark,light,academic,oasis,space") ?: "dark,light,academic,oasis,space")
+            }
+            
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Master Toggle Card
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("الالتقاط الذكي للنصوص", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text("تحليل النصوص المنسوخة التي لا تحتوي على توجيهات، تصنيف نوعها تلقائياً وحفظها في مجلدات مخصصة", color = TextGray, fontSize = 10.sp)
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Switch(
+                            checked = smartCaptureEnabled.value,
+                            onCheckedChange = { isChecked ->
+                                smartCaptureEnabled.value = isChecked
+                                prefs.edit().putBoolean("smart_capture_enabled", isChecked).apply()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = SlateBg,
+                                checkedTrackColor = MetallicGold,
+                                uncheckedThumbColor = TextGray,
+                                uncheckedTrackColor = GlassWhite
+                            ),
+                            modifier = Modifier.testTag("smart_capture_enabled_switch")
+                        )
+                    }
+                }
+
+                // Sub-Settings Cards (Animated / Conditional Visibility)
+                if (smartCaptureEnabled.value) {
+                    // Control Settings Card
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .background(MetallicGold.copy(alpha = 0.15f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = null,
+                                        tint = MetallicGold,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                                Text("إعدادات التحكم المتقدمة بالالتقاط", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                            
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // 1. Save All Texts
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("حفظ كل النصوص المنسوخة (Save All)", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("حفظ النصوص غير المعرفة تلقائياً كملفات عادية دون تجاهلها", color = TextGray, fontSize = 9.sp)
+                                }
+                                Switch(
+                                    checked = saveAllTexts.value,
+                                    onCheckedChange = { isChecked ->
+                                        saveAllTexts.value = isChecked
+                                        prefs.edit().putBoolean("save_all_texts", isChecked).apply()
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = SlateBg,
+                                        checkedTrackColor = MetallicGold,
+                                        uncheckedThumbColor = TextGray,
+                                        uncheckedTrackColor = GlassWhite
+                                    ),
+                                    modifier = Modifier.testTag("save_all_texts_switch")
+                                )
+                            }
+
+                            Divider(color = GlassBorder.copy(alpha = 0.2f), thickness = 0.5.dp)
+
+                            // 2. Ignore Short Texts
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("تجاهل النصوص القصيرة (Ignore Short)", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("تجنب التقاط الكلمات والنصوص القصيرة جداً (أقل من 20 حرفاً) لمنع تكرار وحفظ القصاصات العشوائية", color = TextGray, fontSize = 9.sp)
+                                }
+                                Switch(
+                                    checked = ignoreShortTexts.value,
+                                    onCheckedChange = { isChecked ->
+                                        ignoreShortTexts.value = isChecked
+                                        prefs.edit().putBoolean("ignore_short_texts", isChecked).apply()
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = SlateBg,
+                                        checkedTrackColor = MetallicGold,
+                                        uncheckedThumbColor = TextGray,
+                                        uncheckedTrackColor = GlassWhite
+                                    ),
+                                    modifier = Modifier.testTag("ignore_short_texts_switch")
+                                )
+                            }
+
+                            Divider(color = GlassBorder.copy(alpha = 0.2f), thickness = 0.5.dp)
+
+                            // 3. Apply All Themes
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("تطبيق جميع السمات (Apply All Themes)", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("توليد الملف وتكراره بكل القوالب النشطة وحفظه في مجلداتها بشكل متوازٍ", color = TextGray, fontSize = 9.sp)
+                                }
+                                Switch(
+                                    checked = applyAllThemes.value,
+                                    onCheckedChange = { isChecked ->
+                                        applyAllThemes.value = isChecked
+                                        prefs.edit().putBoolean("apply_all_themes", isChecked).apply()
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = SlateBg,
+                                        checkedTrackColor = MetallicGold,
+                                        uncheckedThumbColor = TextGray,
+                                        uncheckedTrackColor = GlassWhite
+                                    ),
+                                    modifier = Modifier.testTag("apply_all_themes_switch")
+                                )
+                            }
+
+                            // 4. Multiple Themes selector (Only if Multi-Theme is enabled)
+                            if (applyAllThemes.value) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text("السمات النشطة للتوليد المتوازي:", color = MetallicGold, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                val activeSet = activeThemesCsv.value.split(",").filter { it.isNotBlank() }.toSet()
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val row1 = listOf("dark" to "داكن ذهبي", "light" to "فاتح نيون", "academic" to "أكاديمي عتيق")
+                                    row1.forEach { (themeId, label) ->
+                                        val isActive = activeSet.contains(themeId)
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .background(
+                                                    if (isActive) GoldGlassBg else GlassWhite,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .border(
+                                                    0.5.dp,
+                                                    if (isActive) MetallicGold else GlassBorder,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable {
+                                                    val newSet = if (isActive) activeSet - themeId else activeSet + themeId
+                                                    val newCsv = newSet.joinToString(",")
+                                                    activeThemesCsv.value = newCsv
+                                                    prefs.edit().putString("active_themes", newCsv).apply()
+                                                }
+                                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically, 
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                modifier = Modifier.align(Alignment.Center)
+                                            ) {
+                                                Checkbox(
+                                                    checked = isActive,
+                                                    onCheckedChange = {
+                                                        val newSet = if (isActive) activeSet - themeId else activeSet + themeId
+                                                        val newCsv = newSet.joinToString(",")
+                                                        activeThemesCsv.value = newCsv
+                                                        prefs.edit().putString("active_themes", newCsv).apply()
+                                                    },
+                                                    colors = CheckboxDefaults.colors(
+                                                        checkedColor = MetallicGold,
+                                                        checkmarkColor = SlateBg
+                                                    ),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(label, color = if (isActive) MetallicGold else TextSilver, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val row2 = listOf("oasis" to "واحة هادئة", "space" to "سديم فضائي")
+                                    row2.forEach { (themeId, label) ->
+                                        val isActive = activeSet.contains(themeId)
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .background(
+                                                    if (isActive) GoldGlassBg else GlassWhite,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .border(
+                                                    0.5.dp,
+                                                    if (isActive) MetallicGold else GlassBorder,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable {
+                                                    val newSet = if (isActive) activeSet - themeId else activeSet + themeId
+                                                    val newCsv = newSet.joinToString(",")
+                                                    activeThemesCsv.value = newCsv
+                                                    prefs.edit().putString("active_themes", newCsv).apply()
+                                                }
+                                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically, 
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                modifier = Modifier.align(Alignment.Center)
+                                            ) {
+                                                Checkbox(
+                                                    checked = isActive,
+                                                    onCheckedChange = {
+                                                        val newSet = if (isActive) activeSet - themeId else activeSet + themeId
+                                                        val newCsv = newSet.joinToString(",")
+                                                        activeThemesCsv.value = newCsv
+                                                        prefs.edit().putString("active_themes", newCsv).apply()
+                                                    },
+                                                    colors = CheckboxDefaults.colors(
+                                                        checkedColor = MetallicGold,
+                                                        checkmarkColor = SlateBg
+                                                    ),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(label, color = if (isActive) MetallicGold else TextSilver, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                            }
+                                        }
+                                    }
+                                    Box(modifier = Modifier.weight(1f)) // spacer weight
+                                }
+                            }
+                        }
                     }
 
-                    Spacer(modifier = Modifier.width(12.dp))
+                    // CSS Customizer & Preview Card
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .background(MetallicGold.copy(alpha = 0.15f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = null,
+                                        tint = MetallicGold,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                                Text("تخصيص العرض وأنماط الـ CSS المتقدمة", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                            
+                            Text("أدخل أكواد الـ CSS المخصصة ليتم حقنها مباشرة في جميع مستندات الـ HTML التي يولدها النظام:", color = TextGray, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                            
+                            Spacer(modifier = Modifier.height(10.dp))
 
-                    Switch(
-                        checked = smartCaptureEnabled.value,
-                        onCheckedChange = { isChecked ->
-                            smartCaptureEnabled.value = isChecked
-                            prefs.edit().putBoolean("smart_capture_enabled", isChecked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = SlateBg,
-                            checkedTrackColor = MetallicGold,
-                            uncheckedThumbColor = TextGray,
-                            uncheckedTrackColor = GlassWhite
-                        ),
-                        modifier = Modifier.testTag("smart_capture_enabled_switch")
-                    )
+                            OutlinedTextField(
+                                value = customCss.value,
+                                onValueChange = { cssVal ->
+                                    customCss.value = cssVal
+                                    prefs.edit().putString("custom_css", cssVal).apply()
+                                },
+                                placeholder = { Text("/* اكتب أنماط CSS خاصة بك هنا */\nbody { font-family: sans-serif; }", color = TextGray.copy(alpha = 0.5f), fontSize = 11.sp) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(100.dp)
+                                    .testTag("custom_css_input"),
+                                textStyle = TextStyle(color = TextSilver, fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                                singleLine = false,
+                                maxLines = 10,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = TextSilver,
+                                    unfocusedTextColor = TextSilver,
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedBorderColor = MetallicGold,
+                                    unfocusedBorderColor = GlassBorder,
+                                    cursorColor = MetallicGold
+                                )
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Button(
+                                onClick = {
+                                    previewThemeToUse = prefs.getString("document_theme", "dark") ?: "dark"
+                                    showPreviewDialog = true
+                                },
+                                modifier = Modifier.fillMaxWidth().height(36.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MetallicGold.copy(alpha = 0.15f), contentColor = MetallicGold)
+                            ) {
+                                Text("👁️ معاينة النمط للتطبيق والمظهر المباشر", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Document Theme Selector Card
+        // Live Document Theme Selector Card (Visible whether smart capture is on/off as it is the default visual styles)
         item {
             val context = androidx.compose.ui.platform.LocalContext.current
             val prefs = remember { context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE) }
@@ -2821,24 +3139,41 @@ fun SettingsScreen(
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(MetallicGold.copy(alpha = 0.15f), CircleShape),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = MetallicGold,
-                                modifier = Modifier.size(13.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .background(MetallicGold.copy(alpha = 0.15f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = null,
+                                    tint = MetallicGold,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            Text("السمة الافتراضية لعرض المستندات", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
-                        Text("سمة مستندات الالتقاط الذكي الفاخرة", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        
+                        // Small Preview button
+                        TextButton(
+                            onClick = {
+                                previewThemeToUse = currentTheme.value
+                                showPreviewDialog = true
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = MetallicGold)
+                        ) {
+                            Text("👁️ معاينة السمة", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-                    Text("اختر المظهر الجمالي الفاخر لتنسيق صفحات الويب المولدة تلقائياً للمستندات النصية في SmartInbox", color = TextGray, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                    Text("اختر اللمسة الفاخرة التي يتم بها توليد صفحات HTML الخاصة بمستندات smartInbox كقالب افتراضي", color = TextGray, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     
                     Spacer(modifier = Modifier.height(14.dp))
                     
@@ -3077,6 +3412,58 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showPreviewDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showPreviewDialog = false },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { showPreviewDialog = false },
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MetallicGold)
+                ) {
+                    Text("إغلاق المعاينة", fontWeight = FontWeight.Bold)
+                }
+            },
+            title = {
+                Text(
+                    "👁️ المعاينة الحية للنمط: ${com.example.engine.SmartCaptureEngine.getThemeDisplayName(previewThemeToUse)}",
+                    color = TextSilver,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                val htmlData = com.example.engine.SmartCaptureEngine.generatePreviewHtml(previewThemeToUse, context)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(380.dp)
+                        .border(1.dp, GlassBorder, RoundedCornerShape(8.dp))
+                        .background(Color.White)
+                ) {
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        factory = { ctx ->
+                            android.webkit.WebView(ctx).apply {
+                                webViewClient = android.webkit.WebViewClient()
+                                settings.javaScriptEnabled = true
+                                settings.defaultTextEncodingName = "utf-8"
+                            }
+                        },
+                        update = { webView ->
+                            webView.loadDataWithBaseURL(null, htmlData, "text/html", "UTF-8", null)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            },
+            containerColor = SlateBg,
+            textContentColor = TextSilver,
+            titleContentColor = TextSilver,
+            shape = RoundedCornerShape(16.dp),
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+            modifier = Modifier.fillMaxWidth(0.92f)
+        )
     }
 }
 
