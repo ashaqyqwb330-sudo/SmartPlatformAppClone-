@@ -9,6 +9,13 @@ object ProjectContextManager {
 
     var pendingText: String? = null
 
+    private val blacklistedKeywords = setOf(
+        "storage", "emulated", "0", "data", "user", "files", "download", "document", "android",
+        "html", "body", "div", "head", "style", "script", "meta", "link", "class", "id", "href", "src", "doctype", "font", "color", "background",
+        "function", "const", "var", "let", "return", "import", "export", "public", "private", "void", "int", "string", "boolean",
+        "في", "من", "على", "كان", "هذا", "هذه", "الذي", "عن", "إلى", "أو", "ثم", "حيث", "كما", "مع", "ما", "لا", "قد", "إن", "أن", "لم", "لن", "كل", "بعض", "بين", "بعد", "قبل"
+    )
+
     fun getBaseDir(context: Context): File {
         val path = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getString("base_dir_path", null)
         if (!path.isNullOrBlank()) {
@@ -46,7 +53,7 @@ object ProjectContextManager {
             .replace(Regex("[^\\p{L}\\p{N}]"), " ")
         val words = cleaned.split(Regex("\\s+"))
             .map { it.trim() }
-            .filter { it.length > 2 && !stopWords.contains(it) }
+            .filter { it.length >= 3 && !stopWords.contains(it) && !blacklistedKeywords.contains(it) }
         return words.distinct()
     }
 
@@ -64,9 +71,12 @@ object ProjectContextManager {
             val jsonArray = JSONArray(content)
             val list = mutableListOf<String>()
             for (i in 0 until jsonArray.length()) {
-                list.add(jsonArray.getString(i))
+                val kw = jsonArray.getString(i).lowercase().trim()
+                if (kw.length >= 3 && !blacklistedKeywords.contains(kw)) {
+                    list.add(kw)
+                }
             }
-            list
+            list.distinct()
         } catch (e: Exception) {
             emptyList()
         }
@@ -74,7 +84,9 @@ object ProjectContextManager {
 
     fun updateProjectKeywords(projectPath: String, newKeywords: List<String>, context: Context) {
         val oldKeywords = loadProjectKeywords(projectPath, context)
-        val merged = (oldKeywords + newKeywords).distinct()
+        val cleanedNew = newKeywords.map { it.lowercase().trim() }
+            .filter { it.length >= 3 && !blacklistedKeywords.contains(it) }
+        val merged = (oldKeywords + cleanedNew).distinct()
         val file = File(getProjectDir(projectPath, context), "keywords.json")
         try {
             val parent = file.parentFile
@@ -90,10 +102,12 @@ object ProjectContextManager {
     }
 
     fun calculateSimilarity(newText: String, projectKeywords: List<String>): Double {
-        if (projectKeywords.isEmpty()) return 0.0
+        val cleanedProjKeywords = projectKeywords.map { it.lowercase().trim() }
+            .filter { it.length >= 3 && !blacklistedKeywords.contains(it) }
+        if (cleanedProjKeywords.isEmpty()) return 0.0
         val newKeywords = extractKeywords(newText)
         if (newKeywords.isEmpty()) return 0.0
-        val common = newKeywords.filter { projectKeywords.contains(it) }.size
+        val common = newKeywords.filter { cleanedProjKeywords.contains(it) }.size
         return common.toDouble() / newKeywords.size.toDouble()
     }
 

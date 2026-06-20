@@ -259,6 +259,11 @@ object SmartCaptureEngine {
      * Decomposes the given text into structured blocks of CODE, HTML, or TEXT.
      */
     fun decomposeText(text: String): List<ContentBlock> {
+        val trimmed = text.trim()
+        if (trimmed.lowercase(Locale.ROOT).contains("<!doctype html>")) {
+            return listOf(ContentBlock(ContentType.HTML, text))
+        }
+
         val blocks = mutableListOf<ContentBlock>()
         // Match code blocks delimited by three backticks, supporting optional language specifier
         val regex = """```(\w*)[\r\n]*([\s\S]*?)```""".toRegex()
@@ -299,7 +304,8 @@ object SmartCaptureEngine {
 
     private fun isHtmlBlock(text: String): Boolean {
         val trimmedLower = text.trim().lowercase(Locale.ROOT)
-        return trimmedLower.startsWith("<html") ||
+        return trimmedLower.contains("<!doctype html>") ||
+               trimmedLower.startsWith("<html") ||
                trimmedLower.startsWith("<body") ||
                trimmedLower.startsWith("<head") ||
                trimmedLower.startsWith("<div") ||
