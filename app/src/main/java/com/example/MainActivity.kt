@@ -2442,12 +2442,21 @@ fun SettingsScreen(
     var apiKeyManual by remember { mutableStateOf("") }
     
     var showDirBrowser by remember { mutableStateOf(false) }
+    var showProjectFolderBrowser by remember { mutableStateOf(false) }
     var showManualPermissionsDashboard by remember { mutableStateOf(false) }
     var showPreviewDialog by remember { mutableStateOf(false) }
     var previewThemeToUse by remember { mutableStateOf("dark") }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    val prefs = remember(context) { context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE) }
+    var currentProjectPath by remember {
+        mutableStateOf(prefs.getString("current_project_path", "SmartInbox") ?: "SmartInbox")
+    }
+    var enableContextManager by remember {
+        mutableStateOf(prefs.getBoolean("enable_context_manager", true))
+    }
 
     val currentSavedBaseDir = viewModel.baseDirSetting.collectAsState().value
 
@@ -2603,6 +2612,17 @@ fun SettingsScreen(
                     bDir = chosenPath
                     viewModel.saveBaseDir(chosenPath)
                     Toast.makeText(context, "تم حفظ وتثبيت مجلد العمل الجديد!", Toast.LENGTH_SHORT).show()
+                }
+            )
+
+            DirectoryBrowserDialog(
+                isOpen = showProjectFolderBrowser,
+                onDismiss = { showProjectFolderBrowser = false },
+                initialPath = currentProjectPath,
+                onConfirm = { chosenPath ->
+                    currentProjectPath = chosenPath
+                    com.example.engine.ProjectContextManager.setCurrentProjectPath(context, chosenPath)
+                    Toast.makeText(context, "تم تغيير مجلد المشروع الحالي إلى: $chosenPath", Toast.LENGTH_SHORT).show()
                 }
             )
         }
@@ -2770,6 +2790,87 @@ fun SettingsScreen(
                         ),
                         modifier = Modifier.testTag("auto_process_clipboard_switch")
                     )
+                }
+            }
+        }
+
+        // Project Context Card
+        item {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("مدير سياق المشروع", color = MetallicGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("مقارنة النصوص الملتقطة مع سياق الكلمات المفتاحية للمشروع الحالي لمنع تداخل سياقات المحادثات وتحديد مجلدات منفصلة تلقائياً بمرونة تامة.", color = TextGray, fontSize = 10.sp)
+                    
+                    Spacer(modifier = Modifier.height(14.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("تفعيل مدير السياق", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Text("تنبيهك وطلب قرار الحفظ عند نسخ نصوص بعيدة عن سياق المجلد الحالي", color = TextGray, fontSize = 9.sp)
+                        }
+                        Switch(
+                            checked = enableContextManager,
+                            onCheckedChange = { isChecked ->
+                                enableContextManager = isChecked
+                                prefs.edit().putBoolean("enable_context_manager", isChecked).apply()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = SlateBg,
+                                checkedTrackColor = MetallicGold,
+                                uncheckedThumbColor = TextGray,
+                                uncheckedTrackColor = GlassWhite
+                            )
+                        )
+                    }
+                    
+                    if (enableContextManager) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider(color = GlassBorder.copy(alpha = 0.2f), thickness = 0.5.dp)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Text("مسار المشروع الحالي والنشط للالتقاط:", color = MetallicGold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        
+                        Spacer(modifier = Modifier.height(6.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = currentProjectPath,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier.weight(1f),
+                                textStyle = TextStyle(color = TextSilver, fontSize = 11.sp),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = TextSilver,
+                                    unfocusedTextColor = TextSilver,
+                                    focusedBorderColor = MetallicGold,
+                                    unfocusedBorderColor = GlassBorder,
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent
+                                )
+                            )
+                            
+                            Button(
+                                onClick = { showProjectFolderBrowser = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = GoldGlassBg, contentColor = BrightGold),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(54.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp)
+                            ) {
+                                Icon(Icons.Default.Menu, contentDescription = "تغيير مجلد المشروع", modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("تغيير", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
         }

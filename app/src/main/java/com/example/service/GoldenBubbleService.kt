@@ -76,6 +76,13 @@ class GoldenBubbleService : Service(), LifecycleOwner {
     private lateinit var bubbleStatusTxt: TextView
     private var clipboardReceiver: BroadcastReceiver? = null
 
+    // Project Context Dialog Views
+    private var contextDialogLayout: LinearLayout? = null
+    private var contextDialogText: TextView? = null
+    private var saveHereBtn: Button? = null
+    private var newFolderBtn: Button? = null
+    private var ignoreBtn: Button? = null
+
     private val isPaused: Boolean
         get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
 
@@ -107,12 +114,18 @@ class GoldenBubbleService : Service(), LifecycleOwner {
                         lastSavedFilePath = lastSavedPath
                         updateLastActionText("💾 تم حفظ: $lastSavedName (انقر للمستند)")
                     }
+                } else if (intent?.action == "com.example.ACTION_PROJECT_CONTEXT_QUESTION") {
+                    val text = intent.getStringExtra("extra_text") ?: ""
+                    if (text.isNotBlank()) {
+                        showContextDecisionDialog(text)
+                    }
                 }
             }
         }
         val filter = IntentFilter().apply {
             addAction("com.example.ACTION_CLIPBOARD_UPDATED")
             addAction("com.example.ACTION_SMART_CAPTURE_COMPLETED")
+            addAction("com.example.ACTION_PROJECT_CONTEXT_QUESTION")
         }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -787,6 +800,84 @@ class GoldenBubbleService : Service(), LifecycleOwner {
             }
             root.addView(expandedLayout, cardParams)
 
+            // 3. CONTEXT DECISION DIALOG OVERLAY
+            val contextDL = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = createRoundedDrawable("#1F1F35", 16f, "#FFD700", 2)
+                setPadding(dpToPx(14), dpToPx(14), dpToPx(14), dpToPx(14))
+                visibility = View.GONE
+            }
+
+            val cdTitle = TextView(this).apply {
+                text = "💡 قرار سياق المشروع"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(0, 0, 0, dpToPx(8))
+            }
+            contextDL.addView(cdTitle)
+
+            val cdBody = TextView(this).apply {
+                text = ""
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                gravity = Gravity.START
+                setPadding(0, 0, 0, dpToPx(12))
+            }
+            contextDL.addView(cdBody)
+            contextDialogText = cdBody
+
+            val cdActions = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+
+            val btnSaveHere = Button(this).apply {
+                text = "حفظ في المشروع الحالي"
+                setTextColor(Color.BLACK)
+                background = createRoundedDrawable("#10B981", 8f)
+                textSize = 11f
+                setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
+                    setMargins(0, 0, 0, dpToPx(6))
+                }
+                layoutParams = lp
+            }
+            cdActions.addView(btnSaveHere)
+            saveHereBtn = btnSaveHere
+
+            val btnNewFolder = Button(this).apply {
+                text = "مجلد جديد واقتراح اسم"
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#3B82F6", 8f)
+                textSize = 11f
+                setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34)).apply {
+                    setMargins(0, 0, 0, dpToPx(6))
+                }
+                layoutParams = lp
+            }
+            cdActions.addView(btnNewFolder)
+            newFolderBtn = btnNewFolder
+
+            val btnIgnore = Button(this).apply {
+                text = "تجاهل"
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#EF4444", 8f)
+                textSize = 11f
+                setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(34))
+                layoutParams = lp
+            }
+            cdActions.addView(btnIgnore)
+            ignoreBtn = btnIgnore
+
+            contextDL.addView(cdActions)
+            contextDialogLayout = contextDL
+
+            root.addView(contextDL, cardParams)
+
             // Touch Dragging Logic
             var initialX = 0
             var initialY = 0
@@ -846,6 +937,114 @@ class GoldenBubbleService : Service(), LifecycleOwner {
             Toast.makeText(applicationContext, "فشل تشغيل الكرة الذهبية: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
             removeGoldenView()
             stopSelf()
+        }
+    }
+
+    private fun showContextDecisionDialog(text: String) {
+        val currentProj = com.example.engine.ProjectContextManager.getCurrentProjectPath(this)
+        val keywords = com.example.engine.ProjectContextManager.extractKeywords(text)
+        val topic = if (keywords.isNotEmpty()) keywords.take(2).joinToString(" و ") else "موضوعات عامة"
+        
+        val bodyMsg = "هذا النص يبدو أنه عن '$topic'.\nأنت حالياً في مشروع '$currentProj'.\nأين تريد حفظه؟"
+        
+        contextDialogText?.text = bodyMsg
+        
+        saveHereBtn?.setOnClickListener {
+            com.example.engine.ProjectContextManager.isBypassed = true
+            serviceScope.launch {
+                val baseDir = getBaseDir()
+                val cmdContext = com.example.engine.CommandContext(
+                    context = applicationContext,
+                    baseDir = baseDir,
+                    args = emptyMap(),
+                    flags = emptyList()
+                )
+                val results = com.example.engine.SmartCaptureEngine.processCapturedText(text, cmdContext)
+                
+                // Write Log
+                val db = AppDatabase.getDatabase(applicationContext)
+                db.dao().insertLog(
+                    LogEntity(
+                        type = "context_manager",
+                        message = "تم الحفظ في مسار المشروع ذو الصلة ($currentProj)",
+                        details = "تم تأكيد الحفظ بواسطة المستخدم بنجاح.\nالملفات: ${results.savedFiles.joinToString { it.fileName }}"
+                    )
+                )
+                
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, "✅ تم الحفظ في $currentProj", Toast.LENGTH_SHORT).show()
+                    hideContextDecisionDialog()
+                }
+            }
+            com.example.engine.ProjectContextManager.isBypassed = false
+        }
+        
+        newFolderBtn?.setOnClickListener {
+            serviceScope.launch {
+                val baseDir = getBaseDir()
+                val folderName = if (keywords.isNotEmpty()) {
+                    keywords.take(2).joinToString("_")
+                } else {
+                    "مجلد_جديد"
+                }
+                
+                val newFolder = File(baseDir, folderName)
+                newFolder.mkdirs()
+                
+                com.example.engine.ProjectContextManager.setCurrentProjectPath(applicationContext, folderName)
+                
+                com.example.engine.ProjectContextManager.isBypassed = true
+                val cmdContext = com.example.engine.CommandContext(
+                    context = applicationContext,
+                    baseDir = baseDir,
+                    args = emptyMap(),
+                    flags = emptyList()
+                )
+                val results = com.example.engine.SmartCaptureEngine.processCapturedText(text, cmdContext)
+                
+                // Write Log
+                val db = AppDatabase.getDatabase(applicationContext)
+                db.dao().insertLog(
+                    LogEntity(
+                        type = "context_manager",
+                        message = "إنشاء مجلد تلقائي: تم إنشاء مجلد جديد باسم '$folderName' وحفظ المستند فيه.",
+                        details = "سبب الاختيار: لم يتطابق النص الجديد مع سياق المشروع السابق.\nالملفات: ${results.savedFiles.joinToString { it.fileName }}"
+                    )
+                )
+                
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, "✅ تم الحفظ وإنشاء مجلد جديد: $folderName", Toast.LENGTH_SHORT).show()
+                    hideContextDecisionDialog()
+                }
+            }
+            com.example.engine.ProjectContextManager.isBypassed = false
+        }
+        
+        ignoreBtn?.setOnClickListener {
+            hideContextDecisionDialog()
+            Toast.makeText(applicationContext, "❌ تم تجاهل النص", Toast.LENGTH_SHORT).show()
+        }
+        
+        rootLayout?.let { root ->
+            for (i in 0 until root.childCount) {
+                root.getChildAt(i).visibility = View.GONE
+            }
+            contextDialogLayout?.visibility = View.VISIBLE
+        }
+    }
+    
+    private fun hideContextDecisionDialog() {
+        contextDialogLayout?.visibility = View.GONE
+        rootLayout?.let { root ->
+            for (i in 0 until root.childCount) {
+                val child = root.getChildAt(i)
+                if (child == contextDialogLayout) {
+                    child.visibility = View.GONE
+                } else if (child is LinearLayout && child != contextDialogLayout) {
+                    child.visibility = View.VISIBLE
+                    break
+                }
+            }
         }
     }
 

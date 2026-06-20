@@ -4,6 +4,9 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 object SmartCaptureEngine {
 
@@ -129,6 +132,17 @@ object SmartCaptureEngine {
                 ignoredShortTextsVal++
                 continue
             }
+
+            // التحقق من سياق المشروع والمطبوعات
+            if (ProjectContextManager.shouldAskForContext(block.content, context.context)) {
+                ProjectContextManager.pendingText = block.content
+                val intent = android.content.Intent("com.example.ACTION_PROJECT_CONTEXT_QUESTION").apply {
+                    putExtra("extra_text", block.content)
+                    setPackage(context.context.packageName)
+                }
+                context.context.sendBroadcast(intent)
+                continue
+            }
             
             // تحديد عنوان ذكي مناسب للمستند
             val extractedTitle = if (block.content.isNotBlank()) extractSmartTitle(block) else "untitled"
@@ -141,37 +155,42 @@ object SmartCaptureEngine {
                 listOf(sp.getString("document_theme", "dark") ?: "dark")
             }
             
+            val projectDir = ProjectContextManager.getCurrentProjectDir(context.context)
+
             when (block.type) {
                 ContentType.CODE -> {
                     val ext = languageToExtension(block.language)
                     if (ext == "html") {
-                        val targetDir = File(context.baseDir, "SmartInbox")
+                        val targetDir = projectDir
                         val targetFile = getUniqueFile(targetDir, title, "html")
                         val saved = saveFile(targetFile, block.content)
                         if (saved) {
                             savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "HTML"))
+                            ProjectContextManager.updateProjectKeywords(ProjectContextManager.getCurrentProjectPath(context.context), ProjectContextManager.extractKeywords(block.content), context.context)
                         } else {
                             errors.add("فشل حفظ كود HTML: ${targetFile.name}")
                         }
                     } else {
                         val codeTitleWithExt = extractCodeTitle(block.content, block.language)
                         val baseName = codeTitleWithExt.substringBeforeLast(".")
-                        val targetDir = File(context.baseDir, "SmartInbox/code")
+                        val targetDir = File(projectDir, "code")
                         val targetFile = getUniqueFile(targetDir, baseName, ext)
                         val saved = saveFile(targetFile, block.content)
                         if (saved) {
                             savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "CODE"))
+                            ProjectContextManager.updateProjectKeywords(ProjectContextManager.getCurrentProjectPath(context.context), ProjectContextManager.extractKeywords(block.content), context.context)
                         } else {
                             errors.add("فشل حفظ كود برمجي: ${targetFile.name}")
                         }
                     }
                 }
                 ContentType.HTML -> {
-                    val targetDir = File(context.baseDir, "SmartInbox")
+                    val targetDir = projectDir
                     val targetFile = getUniqueFile(targetDir, title, "html")
                     val saved = saveFile(targetFile, block.content)
                     if (saved) {
                         savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "HTML"))
+                        ProjectContextManager.updateProjectKeywords(ProjectContextManager.getCurrentProjectPath(context.context), ProjectContextManager.extractKeywords(block.content), context.context)
                     } else {
                         errors.add("فشل حفظ صفحة ويب: ${targetFile.name}")
                     }
@@ -180,9 +199,9 @@ object SmartCaptureEngine {
                     for (themeId in themesToApply) {
                         val targetSubdir = if (applyAllThemes) {
                             val dirSubName = getThemeFolder(themeId)
-                            File(context.baseDir, "SmartInbox/$dirSubName")
+                            File(projectDir, dirSubName)
                         } else {
-                            File(context.baseDir, "SmartInbox")
+                            projectDir
                         }
                         
                         var htmlContent = generateHtmlWrapper(title, "نص", block.content, themeId)
@@ -198,6 +217,7 @@ object SmartCaptureEngine {
                         val saved = saveFile(targetFile, htmlContent)
                         if (saved) {
                             savedFiles.add(SavedFileInfo(targetFile.name, targetFile.absolutePath, "HTML"))
+                            ProjectContextManager.updateProjectKeywords(ProjectContextManager.getCurrentProjectPath(context.context), ProjectContextManager.extractKeywords(block.content), context.context)
                         } else {
                             errors.add("فشل تحويل مستند بالسمة ($themeId): ${targetFile.name}")
                         }
@@ -208,6 +228,22 @@ object SmartCaptureEngine {
         
         if (savedFiles.isNotEmpty()) {
             sp.edit().putString("last_processed_text_hash", textHash).apply()
+            
+            val currentProj = ProjectContextManager.getCurrentProjectPath(context.context)
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val db = com.example.db.AppDatabase.getDatabase(context.context)
+                    db.dao().insertLog(
+                        com.example.db.LogEntity(
+                            type = "context_manager",
+                            message = "تم حفظ مستند (${savedFiles.first().fileName}) بنجاح في سياق المشروع الحالي: $currentProj",
+                            details = "تم الحفظ تلقائياً دون الحاجة إلى توجيه لأن النصوص الواردة مطابقة لسياق الكلمات المفتاحية للمشروع.\nالملفات: ${savedFiles.joinToString { it.fileName }}"
+                        )
+                    )
+                } catch (e: Exception) {
+                    // silently ignored
+                }
+            }
         }
         
         return CaptureResult(
