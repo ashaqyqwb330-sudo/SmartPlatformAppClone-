@@ -28,9 +28,20 @@ object SmartCaptureEngine {
         // 2. فكك النص
         val blocks = decomposeText(text)
         val results = mutableListOf<String>()
+        
+        var textsSaved = 0
+        var codesSaved = 0
 
         for (block in blocks) {
             if (block.content.isBlank()) continue
+
+            // 4. تجاهل النصوص القصيرة تلقائيًا (أقل من 20 حرفاً)
+            val trimmedBlockContent = block.content.trim()
+            if ((block.type == ContentType.TEXT || block.type == ContentType.HTML) && trimmedBlockContent.length < 20) {
+                results.add("⚠️ تجاهل نص قصير: '${trimmedBlockContent.take(15)}...'")
+                android.util.Log.d("SmartCaptureEngine", "تجاهل نص قصير جداً: '$trimmedBlockContent'")
+                continue
+            }
             
             when (block.type) {
                 ContentType.CODE -> {
@@ -42,21 +53,23 @@ object SmartCaptureEngine {
                         val targetFile = getUniqueFile(targetDir, title, "html")
                         val saved = saveFile(targetFile, block.content)
                         if (saved) {
-                            results.add("✅ تم حفظ '$title'")
+                            textsSaved++
+                            results.add("✅ تم حفظ كود HTML كصفحة ويب: '$title'")
                         } else {
-                            results.add("❌ فشل حفظ '$title'")
+                            results.add("❌ فشل حفظ كود HTML: '$title'")
                         }
                     } else {
-                        // CODE programming
-                        val codeTitleWithExt = extractCodeTitle(block.language)
+                        // CODE programming - Using the custom smart filename
+                        val codeTitleWithExt = extractCodeTitle(block.content, block.language)
                         val baseName = codeTitleWithExt.substringBeforeLast(".")
                         val targetDir = File(context.baseDir, "SmartInbox/code")
                         val targetFile = getUniqueFile(targetDir, baseName, ext)
                         val saved = saveFile(targetFile, block.content)
                         if (saved) {
-                            results.add("✅ تم حفظ '${targetFile.name}'")
+                            codesSaved++
+                            results.add("✅ تم حفظ كود برمجي: '${targetFile.name}'")
                         } else {
-                            results.add("❌ فشل حفظ '${targetFile.name}'")
+                            results.add("❌ فشل حفظ كود برمجي: '${targetFile.name}'")
                         }
                     }
                 }
@@ -67,33 +80,48 @@ object SmartCaptureEngine {
                     val targetFile = getUniqueFile(targetDir, title, "html")
                     val saved = saveFile(targetFile, block.content)
                     if (saved) {
-                        results.add("✅ تم حفظ '$title'")
+                        textsSaved++
+                        results.add("✅ تم حفظ صفحة ويب: '$title'")
                     } else {
-                        results.add("❌ فشل حفظ '$title'")
+                        results.add("❌ فشل حفظ صفحة ويب: '$title'")
                     }
                 }
                 ContentType.TEXT -> {
-                    // ConvertMode: تطبيق قالب HTML ثم حفظ.
+                    // ConvertMode: تطبيق قالب HTML محسن مع دعم Markdown ثم حفظ.
                     val title = extractSmartTitle(block)
                     val htmlContent = generateHtmlWrapper(title, "نص", block.content)
                     val targetDir = File(context.baseDir, "SmartInbox")
                     val targetFile = getUniqueFile(targetDir, title, "html")
                     val saved = saveFile(targetFile, htmlContent)
                     if (saved) {
-                        results.add("✅ تم تحويل وحفظ '$title'")
+                        textsSaved++
+                        results.add("✅ تم تحويل وحفظ مستند نصي: '$title'")
                     } else {
-                        results.add("❌ فشل تحويل وحفظ '$title'")
+                        results.add("❌ فشل تحويل وحفظ مستند نصي: '$title'")
                     }
                 }
             }
         }
 
+        // Detailed events log for the background event logger (Logcat)
+        android.util.Log.i("SmartCaptureEngine", "Smart Capture System Log: " + results.joinToString(" | "))
+
         // Save current text hash for deduplication if we successfully saved anything
-        if (results.any { it.startsWith("✅") }) {
+        if (textsSaved > 0 || codesSaved > 0) {
             sp.edit().putString("last_processed_text_hash", textHash).apply()
+            
+            // 5. تحسين رسائل الفقاعة الذهبية (Concise response message)
+            val textPart = if (textsSaved > 0) "$textsSaved نصوص" else ""
+            val codePart = if (codesSaved > 0) "$codesSaved كود" else ""
+            val separator = if (textsSaved > 0 && codesSaved > 0) "، " else ""
+            return "✅ حفظ: ${textPart}${separator}${codePart} في SmartInbox"
         }
 
-        return "تمت معالجة ${blocks.size} كتل: ${results.joinToString(" | ")}"
+        if (results.any { it.contains("تجاهل نص قصير") }) {
+            return "تجاهل نص قصير"
+        }
+
+        return "لا يوجد محتوى جديد للحفظ"
     }
 
     /**
@@ -148,7 +176,7 @@ object SmartCaptureEngine {
     }
 
     /**
-     * Extracts a descriptive title for a parsed block.
+     * Extracts a descriptive title for a parsed block with advanced sentence-endpoint detection.
      */
     fun extractSmartTitle(block: ContentBlock): String {
         var rawTitle = ""
@@ -170,13 +198,33 @@ object SmartCaptureEngine {
             }
         }
 
+        // 2. تحسين استخراج العناوين للنصوص
         if (rawTitle.isBlank()) {
-            rawTitle = block.content
+            val content = block.content.trim()
+            val delimiters = charArrayOf('.', '!', '؟', '\n')
+            var firstDelimIndex = -1
+            for (i in content.indices) {
+                if (content[i] in delimiters) {
+                    firstDelimIndex = i
+                    break
+                }
+            }
+            rawTitle = if (firstDelimIndex != -1) {
+                val sentence = content.substring(0, firstDelimIndex).trim()
+                if (sentence.isNotEmpty()) {
+                    if (sentence.length > 60) sentence.substring(0, 60).trim() else sentence
+                } else {
+                    if (content.length > 50) content.substring(0, 50).trim() else content
+                }
+            } else {
+                if (content.length > 50) content.substring(0, 50).trim() else content
+            }
         }
 
         val cleaned = sanitizeFileName(rawTitle)
         var title = if (cleaned.length > 50) cleaned.substring(0, 50).trim() else cleaned
 
+        // Fallback for short title or default name
         if (title.length < 3 || title == "مستند_غير_معنون") {
             title = if (isHtmlLike) "صفحة_ويب" else "مستند_غير_معنون"
         }
@@ -200,15 +248,46 @@ object SmartCaptureEngine {
     }
 
     /**
-     * Generates a code filename for coding snippets.
+     * 1. أسماء ملفات كود أكثر ذكاءً
+     * Generates a unique, smart code filename by analyzing the first 5 comment lines.
      */
-    fun extractCodeTitle(language: String): String {
+    fun extractCodeTitle(content: String, language: String): String {
         val ext = languageToExtension(language)
+        val lines = content.lines().take(5)
+        var foundComment: String? = null
+        for (line in lines) {
+            val trimmedLine = line.trim()
+            if (trimmedLine.startsWith("//") || trimmedLine.startsWith("#") || trimmedLine.startsWith("<!--")) {
+                var cleanComment = trimmedLine
+                    .removePrefix("//")
+                    .removePrefix("#")
+                    .removePrefix("<!--")
+                
+                if (cleanComment.endsWith("-->")) {
+                    cleanComment = cleanComment.removeSuffix("-->")
+                }
+                
+                cleanComment = cleanComment.trim()
+                if (cleanComment.isNotEmpty()) {
+                    foundComment = cleanComment
+                    break
+                }
+            }
+        }
+
+        if (foundComment != null) {
+            val sanitized = sanitizeFileName(foundComment)
+            val finalName = if (sanitized.length > 30) sanitized.substring(0, 30).trim() else sanitized
+            if (finalName.isNotEmpty() && finalName != "مستند_غير_معنون") {
+                val underscored = finalName.replace(Regex("\\s+"), "_")
+                return "$underscored.$ext"
+            }
+        }
         return "code_snippet.$ext"
     }
 
     /**
-     * Sanitizes file names to meet clean structured naming guidelines.
+     * 4. تنظيف أسماء الملفات (Smarter sanitization guidelines)
      */
     fun sanitizeFileName(raw: String): String {
         // Strip HTML tags first to isolate text representation
@@ -293,8 +372,40 @@ object SmartCaptureEngine {
         }
     }
 
+    /**
+     * 3. دمج تحويل أساسي لـ Markdown إلى HTML
+     */
+    fun convertMarkdownToHtml(markdown: String): String {
+        var html = markdown
+        
+        // 1. Convert bold **text** to <b>text</b>
+        val boldRegex = """\*\*((?!\*\*).+?)\*\*""".toRegex()
+        html = html.replace(boldRegex, "<b>$1</b>")
+
+        // 2. Headings and list items line by line
+        val lines = html.lines()
+        val convertedLines = lines.map { line ->
+            val trimmed = line.trim()
+            if (trimmed.startsWith("#")) {
+                val level = trimmed.takeWhile { it == '#' }.length
+                val text = trimmed.drop(level).trim()
+                "<h$level>$text</h$level>"
+            } else if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
+                val text = trimmed.substring(2).trim()
+                "<li>$text</li>"
+            } else {
+                line
+            }
+        }
+        return convertedLines.joinToString("\n")
+    }
+
+    /**
+     * 3. تحسين قالب HTML للتحويل بسلاسة وتصميم أنيق وجذاب.
+     */
     private fun generateHtmlWrapper(title: String, category: String, content: String): String {
         val dateStr = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val htmlBody = convertMarkdownToHtml(content)
         return """
             <!DOCTYPE html>
             <html lang="ar" dir="auto">
@@ -302,13 +413,16 @@ object SmartCaptureEngine {
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>$title</title>
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
                 <style>
                     body {
-                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                        background-color: #0f172a;
-                        color: #f1f5f9;
+                        font-family: 'Cairo', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        background-color: #0b0f19;
+                        color: #cbd5e1;
                         margin: 0;
-                        padding: 24px;
+                        padding: 30px 20px;
                         display: flex;
                         justify-content: center;
                         align-items: center;
@@ -317,37 +431,60 @@ object SmartCaptureEngine {
                     .container {
                         width: 100%;
                         max-width: 800px;
-                        background-color: #1e293b;
-                        padding: 32px;
-                        border-radius: 16px;
-                        box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
-                        border: 1px solid #334155;
+                        background-color: #111827;
+                        padding: 40px;
+                        border-radius: 20px;
+                        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+                        border: 1px solid #1f2937;
                     }
                     h1 {
                         color: #38bdf8;
-                        font-size: 24px;
+                        font-size: 28px;
+                        font-weight: 700;
                         margin-top: 0;
-                        margin-bottom: 8px;
-                        border-bottom: 2px solid #334155;
-                        padding-bottom: 12px;
+                        margin-bottom: 12px;
+                        border-bottom: 2px solid #1f2937;
+                        padding-bottom: 16px;
+                    }
+                    h2 {
+                        color: #60a5fa;
+                        font-size: 22px;
+                        margin-top: 24px;
+                        margin-bottom: 12px;
+                    }
+                    h3 {
+                        color: #93c5fd;
+                        font-size: 18px;
+                        margin-top: 20px;
+                        margin-bottom: 10px;
                     }
                     .meta {
-                        font-size: 12px;
+                        font-size: 13px;
                         color: #94a3b8;
-                        margin-bottom: 24px;
+                        margin-bottom: 30px;
                         display: flex;
-                        gap: 16px;
+                        gap: 12px;
+                        flex-wrap: wrap;
                     }
                     .meta span {
-                        background-color: #334155;
-                        padding: 4px 12px;
-                        border-radius: 20px;
+                        background-color: #1f2937;
+                        color: #38bdf8;
+                        padding: 6px 16px;
+                        border-radius: 30px;
+                        font-weight: 600;
                     }
                     .content {
-                        font-size: 16px;
-                        line-height: 1.8;
+                        font-size: 17px;
+                        line-height: 1.9;
                         white-space: pre-wrap;
-                        color: #cbd5e1;
+                        color: #e2e8f0;
+                    }
+                    li {
+                        margin-bottom: 8px;
+                    }
+                    b, strong {
+                        color: #f8fafc;
+                        font-weight: 700;
                     }
                 </style>
             </head>
@@ -358,7 +495,7 @@ object SmartCaptureEngine {
                         <span>التصنيف: $category</span>
                         <span>التاريخ: $dateStr</span>
                     </div>
-                    <div class="content">$content</div>
+                    <div class="content">$htmlBody</div>
                 </div>
             </body>
             </html>
