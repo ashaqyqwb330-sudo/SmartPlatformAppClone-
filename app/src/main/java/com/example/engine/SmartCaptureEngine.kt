@@ -145,7 +145,7 @@ object SmartCaptureEngine {
             }
             
             // تحديد عنوان ذكي مناسب للمستند
-            val extractedTitle = if (block.content.isNotBlank()) extractSmartTitle(block) else "untitled"
+            val extractedTitle = if (block.content.isNotBlank()) extractSmartTitle(block, context.context) else "untitled"
             val title = if (extractedTitle.isBlank() || extractedTitle == "بدون عنوان") "untitled" else extractedTitle
             
             // تحديد القوالب النشطة المراد تطبيقها وحفظها
@@ -171,7 +171,7 @@ object SmartCaptureEngine {
                             errors.add("فشل حفظ كود HTML: ${targetFile.name}")
                         }
                     } else {
-                        val codeTitleWithExt = extractCodeTitle(block.content, block.language)
+                        val codeTitleWithExt = extractCodeTitle(block.content, block.language, context.context)
                         val baseName = codeTitleWithExt.substringBeforeLast(".")
                         val targetDir = File(projectDir, "code")
                         val targetFile = getUniqueFile(targetDir, baseName, ext)
@@ -315,7 +315,7 @@ object SmartCaptureEngine {
     /**
      * Extracts a descriptive title for a parsed block with advanced sentence-endpoint detection.
      */
-    fun extractSmartTitle(block: ContentBlock): String {
+    fun extractSmartTitle(block: ContentBlock, context: android.content.Context? = null): String {
         var rawTitle = ""
         val isHtmlLike = block.type == ContentType.HTML || 
                          (block.type == ContentType.CODE && block.language.lowercase(Locale.ROOT) == "html")
@@ -358,7 +358,7 @@ object SmartCaptureEngine {
             }
         }
 
-        val cleaned = sanitizeFileName(rawTitle)
+        val cleaned = sanitizeFileName(rawTitle, context)
         var title = if (cleaned.length > 50) cleaned.substring(0, 50).trim() else cleaned
 
         // Fallback for short title or default name
@@ -388,7 +388,7 @@ object SmartCaptureEngine {
      * 1. أسماء ملفات كود أكثر ذكاءً
      * Generates a unique, smart code filename by analyzing the first 5 comment lines.
      */
-    fun extractCodeTitle(content: String, language: String): String {
+    fun extractCodeTitle(content: String, language: String, context: android.content.Context? = null): String {
         val ext = languageToExtension(language)
         val lines = content.lines().take(5)
         var foundComment: String? = null
@@ -413,7 +413,7 @@ object SmartCaptureEngine {
         }
 
         if (foundComment != null) {
-            val sanitized = sanitizeFileName(foundComment)
+            val sanitized = sanitizeFileName(foundComment, context)
             val finalName = if (sanitized.length > 30) sanitized.substring(0, 30).trim() else sanitized
             if (finalName.isNotEmpty() && finalName != "مستند_غير_معنون") {
                 val underscored = finalName.replace(Regex("\\s+"), "_")
@@ -426,53 +426,84 @@ object SmartCaptureEngine {
     /**
      * 4. تنظيف أسماء الملفات (Smarter sanitization guidelines)
      */
-    fun sanitizeFileName(raw: String): String {
-        // Strip HTML tags first to isolate text representation
-        var name = raw.replace(Regex("<[^>]*>"), " ")
+    fun sanitizeFileName(raw: String, context: android.content.Context? = null): String {
+        val prefs = context?.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE)
+        val fileNamingMode = prefs?.getString("file_naming_mode", "CLEAN") ?: "CLEAN"
 
-        // 1. إزالة رموز Markdown من البداية
-        var temp = name.trim()
-        var changed = true
-        while (changed) {
-            changed = false
-            if (temp.startsWith("##")) {
-                temp = temp.substring(2).trim()
-                changed = true
+        when (fileNamingMode) {
+            "RAW" -> {
+                var name = raw.replace(Regex("[\\\\/:*?\"<>|]"), " ")
+                name = name.replace(Regex("\\s+"), " ").trim()
+                if (name.length < 3) {
+                    name = "مستند_غير_معنون"
+                }
+                return name
             }
-            if (temp.startsWith("**")) {
-                temp = temp.substring(2).trim()
-                changed = true
+            "CUSTOM" -> {
+                val pattern = prefs?.getString("custom_naming_pattern", "{date}_{title}") ?: "{date}_{title}"
+                val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
+                val cleanTitle = raw.replace(Regex("<[^>]*>"), " ")
+                    .replace(Regex("[\\\\/:*?\"<>|]"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                var formatted = pattern
+                    .replace("{date}", dateStr)
+                    .replace("{title}", cleanTitle)
+                formatted = formatted.replace(Regex("[\\\\/:*?\"<>|]"), " ").replace(Regex("\\s+"), " ").trim()
+                if (formatted.length < 3) {
+                    formatted = "مستند_غير_معنون"
+                }
+                return formatted
             }
-            if (temp.startsWith("---")) {
-                temp = temp.substring(3).trim()
-                changed = true
-            }
-            if (temp.startsWith("```")) {
-                temp = temp.substring(3).trim()
-                changed = true
+            else -> {
+                // Strip HTML tags first to isolate text representation
+                var name = raw.replace(Regex("<[^>]*>"), " ")
+
+                // 1. إزالة رموز Markdown من البداية
+                var temp = name.trim()
+                var changed = true
+                while (changed) {
+                    changed = false
+                    if (temp.startsWith("##")) {
+                        temp = temp.substring(2).trim()
+                        changed = true
+                    }
+                    if (temp.startsWith("**")) {
+                        temp = temp.substring(2).trim()
+                        changed = true
+                    }
+                    if (temp.startsWith("---")) {
+                        temp = temp.substring(3).trim()
+                        changed = true
+                    }
+                    if (temp.startsWith("```")) {
+                        temp = temp.substring(3).trim()
+                        changed = true
+                    }
+                }
+                name = temp
+
+                // 2. إزالة الكلمات التي تشبه مسارات النظام
+                val pathWords = setOf("storage", "emulated", "0", "data", "user", "files")
+                val words = name.split(Regex("\\s+"))
+                val filteredWords = words.filter { word ->
+                    word.lowercase(Locale.ROOT) !in pathWords
+                }
+                name = filteredWords.joinToString(" ")
+
+                // Replace filesystem incompatible characters
+                name = name.replace(Regex("[\\\\/:*?\"<>|]"), " ")
+
+                // 3. دمج المسافات المتعددة في مسافة واحدة وإزالة المسافات الزائدة من الأطراف
+                name = name.replace(Regex("\\s+"), " ").trim()
+
+                // 4. إذا كان الاسم الناتج أقصر من 3 أحرف، استخدم "مستند_غير_معنون"
+                if (name.length < 3) {
+                    name = "مستند_غير_معنون"
+                }
+                return name
             }
         }
-        name = temp
-
-        // 2. إزالة الكلمات التي تشبه مسارات النظام
-        val pathWords = setOf("storage", "emulated", "0", "data", "user", "files")
-        val words = name.split(Regex("\\s+"))
-        val filteredWords = words.filter { word ->
-            word.lowercase(Locale.ROOT) !in pathWords
-        }
-        name = filteredWords.joinToString(" ")
-
-        // Replace filesystem incompatible characters
-        name = name.replace(Regex("[\\\\/:*?\"<>|]"), " ")
-
-        // 3. دمج المسافات المتعددة في مسافة واحدة وإزالة المسافات الزائدة من الأطراف
-        name = name.replace(Regex("\\s+"), " ").trim()
-
-        // 4. إذا كان الاسم الناتج أقصر من 3 أحرف، استخدم "مستند_غير_معنون"
-        if (name.length < 3) {
-            name = "مستند_غير_معنون"
-        }
-        return name
     }
 
     /**

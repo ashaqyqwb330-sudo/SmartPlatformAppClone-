@@ -2457,6 +2457,15 @@ fun SettingsScreen(
     var enableContextManager by remember {
         mutableStateOf(prefs.getBoolean("enable_context_manager", true))
     }
+    var folderNamingMode by remember {
+        mutableStateOf(prefs.getString("folder_naming_mode", "SMART") ?: "SMART")
+    }
+    var fileNamingMode by remember {
+        mutableStateOf(prefs.getString("file_naming_mode", "CLEAN") ?: "CLEAN")
+    }
+    var customNamingPattern by remember {
+        mutableStateOf(prefs.getString("custom_naming_pattern", "{date}_{title}") ?: "{date}_{title}")
+    }
 
     val currentSavedBaseDir = viewModel.baseDirSetting.collectAsState().value
 
@@ -2870,6 +2879,133 @@ fun SettingsScreen(
                                 Text("تغيير", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Advanced Naming Options Card
+        item {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("إعدادات التسمية المتقدمة والمخصصة", color = MetallicGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("تخصيص طريقة اقتراح أسماء المجلدات ونمط تسمية مستنداتك وملفات كود البرمجة الملتقطة بمرونة مطلقة.", color = TextGray, fontSize = 10.sp)
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // 1. Folder naming Mode Selector
+                    Text("💡 طريقة تسمية مجلدات المشاريع الجديدة:", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val modes = listOf(
+                            Triple("SMART", "ذكية (تلقائي)", "تستخرج الكلمات المفتاحية الذكية"),
+                            Triple("FIRST_LINE", "أول سطر", "تأخذ أول 50 حرفاً"),
+                            Triple("MANUAL", "يسألني دائماً", "تطلب تسمية يدوية")
+                        )
+                        modes.forEach { (modeCode, modeTitle, _) ->
+                            val isSelected = folderNamingMode == modeCode
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .background(
+                                        if (isSelected) MetallicGold.copy(alpha = 0.25f) else Color.Transparent,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isSelected) MetallicGold else GlassBorder,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable {
+                                        folderNamingMode = modeCode
+                                        prefs.edit().putString("folder_naming_mode", modeCode).apply()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = modeTitle,
+                                    color = if (isSelected) BrightGold else TextGray,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Divider(color = GlassBorder.copy(alpha = 0.15f), thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(14.dp))
+                    
+                    // 2. File naming Pattern Selector
+                    Text("📝 نمط تسمية الملفات والمستندات:", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val fileModes = listOf(
+                            Triple("CLEAN", "نظيفة وآمنة", "تنظيف كامل وحذف رموز Markdown وكلمات النظام الشائعة"),
+                            Triple("RAW", "خام", "حذف رموز نظام الملفات الممنوعة فقط مع الحفاظ على البقية"),
+                            Triple("CUSTOM", "نمط مخصص", "استخدام قالب مخصص محدد من قبلك")
+                        )
+                        fileModes.forEach { (modeCode, modeTitle, _) ->
+                            val isSelected = fileNamingMode == modeCode
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .background(
+                                        if (isSelected) MetallicGold.copy(alpha = 0.25f) else Color.Transparent,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isSelected) MetallicGold else GlassBorder,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable {
+                                        fileNamingMode = modeCode
+                                        prefs.edit().putString("file_naming_mode", modeCode).apply()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = modeTitle,
+                                    color = if (isSelected) BrightGold else TextGray,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                    
+                    if (fileNamingMode == "CUSTOM") {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("اكتب نمط التسمية المخصص الخاص بك (يمكنك استخدام {date} للتاريخ و {title} للعنوان):", color = TextGray, fontSize = 9.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        
+                        OutlinedTextField(
+                            value = customNamingPattern,
+                            onValueChange = { newVal ->
+                                customNamingPattern = newVal
+                                prefs.edit().putString("custom_naming_pattern", newVal).apply()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = TextSilver, fontSize = 11.sp),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextSilver,
+                                unfocusedTextColor = TextSilver,
+                                focusedBorderColor = MetallicGold,
+                                unfocusedBorderColor = GlassBorder,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent
+                            )
+                        )
                     }
                 }
             }

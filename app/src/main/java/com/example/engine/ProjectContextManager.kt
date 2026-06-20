@@ -133,4 +133,29 @@ object ProjectContextManager {
         val similarity = calculateSimilarity(newText, projKeywords)
         return similarity < 0.2
     }
+
+    fun suggestFolderName(text: String, context: Context): String {
+        val prefs = context.getSharedPreferences("SmartCapturePrefs", Context.MODE_PRIVATE)
+        val namingMode = prefs.getString("folder_naming_mode", "SMART") ?: "SMART"
+        return when (namingMode) {
+            "FIRST_LINE" -> {
+                val lines = text.trim().lines()
+                val firstLine = lines.firstOrNull { it.isNotBlank() } ?: "مجلد_جديد"
+                var folderName = if (firstLine.length > 50) firstLine.take(47) + "..." else firstLine
+                folderName = folderName.replace(Regex("[\\\\/:*?\"<>|]"), " ").replace(Regex("\\s+"), "_").trim()
+                if (folderName.isEmpty()) "مجلد_جديد" else folderName
+            }
+            "MANUAL" -> {
+                "MANUAL"
+            }
+            else -> { // SMART
+                val keywords = extractKeywords(text)
+                if (keywords.isNotEmpty()) {
+                    keywords.take(2).joinToString("_")
+                } else {
+                    "مجلد_جديد"
+                }
+            }
+        }
+    }
 }

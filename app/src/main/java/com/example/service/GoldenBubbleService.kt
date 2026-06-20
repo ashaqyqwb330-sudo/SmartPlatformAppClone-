@@ -83,6 +83,12 @@ class GoldenBubbleService : Service(), LifecycleOwner {
     private var newFolderBtn: Button? = null
     private var ignoreBtn: Button? = null
 
+    // Manual Folder Name Input Views
+    private var manualNameInputLayout: LinearLayout? = null
+    private var manualFolderNameEditText: android.widget.EditText? = null
+    private var confirmManualFolderBtn: Button? = null
+    private var cancelManualFolderBtn: Button? = null
+
     private val isPaused: Boolean
         get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
 
@@ -878,6 +884,74 @@ class GoldenBubbleService : Service(), LifecycleOwner {
 
             root.addView(contextDL, cardParams)
 
+            // 4. MANUAL FOLDER NAME INPUT OVERLAY
+            val manualFL = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = createRoundedDrawable("#1F1F35", 16f, "#FFD700", 2)
+                setPadding(dpToPx(14), dpToPx(14), dpToPx(14), dpToPx(14))
+                visibility = View.GONE
+            }
+
+            val mfTitle = TextView(this).apply {
+                text = "📁 مجلد مشروع جديد"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(0, 0, 0, dpToPx(8))
+            }
+            manualFL.addView(mfTitle)
+
+            val mfEditText = android.widget.EditText(this).apply {
+                hint = "اكتب اسم المجلد الجديد..."
+                setHintTextColor(Color.GRAY)
+                setTextColor(Color.WHITE)
+                textSize = 13f
+                background = createRoundedDrawable("#2A2A44", 8f, "#444466", 1)
+                setPadding(dpToPx(10), dpToPx(8), dpToPx(10), dpToPx(8))
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, 0, 0, dpToPx(12))
+                }
+                layoutParams = lp
+            }
+            manualFL.addView(mfEditText)
+            manualFolderNameEditText = mfEditText
+
+            val mfBtnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+            }
+
+            val btnCancelManual = Button(this).apply {
+                text = "إلغاءونص"
+                text = "إلغاء"
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#EF4444", 8f)
+                textSize = 12f
+                val lp = LinearLayout.LayoutParams(0, dpToPx(34), 1f).apply {
+                    setMargins(0, 0, dpToPx(6), 0)
+                }
+                layoutParams = lp
+            }
+            mfBtnRow.addView(btnCancelManual)
+            cancelManualFolderBtn = btnCancelManual
+
+            val btnConfirmManual = Button(this).apply {
+                text = "تأكيد"
+                setTextColor(Color.BLACK)
+                background = createRoundedDrawable("#10B981", 8f)
+                textSize = 12f
+                val lp = LinearLayout.LayoutParams(0, dpToPx(34), 1f)
+                layoutParams = lp
+            }
+            mfBtnRow.addView(btnConfirmManual)
+            confirmManualFolderBtn = btnConfirmManual
+
+            manualFL.addView(mfBtnRow)
+            manualNameInputLayout = manualFL
+
+            root.addView(manualFL, cardParams)
+
             // Touch Dragging Logic
             var initialX = 0
             var initialY = 0
@@ -980,44 +1054,12 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         }
         
         newFolderBtn?.setOnClickListener {
-            serviceScope.launch {
-                val baseDir = getBaseDir()
-                val folderName = if (keywords.isNotEmpty()) {
-                    keywords.take(2).joinToString("_")
-                } else {
-                    "مجلد_جديد"
-                }
-                
-                val newFolder = File(baseDir, folderName)
-                newFolder.mkdirs()
-                
-                com.example.engine.ProjectContextManager.setCurrentProjectPath(applicationContext, folderName)
-                
-                com.example.engine.ProjectContextManager.isBypassed = true
-                val cmdContext = com.example.engine.CommandContext(
-                    context = applicationContext,
-                    baseDir = baseDir,
-                    args = emptyMap(),
-                    flags = emptyList()
-                )
-                val results = com.example.engine.SmartCaptureEngine.processCapturedText(text, cmdContext)
-                
-                // Write Log
-                val db = AppDatabase.getDatabase(applicationContext)
-                db.dao().insertLog(
-                    LogEntity(
-                        type = "context_manager",
-                        message = "إنشاء مجلد تلقائي: تم إنشاء مجلد جديد باسم '$folderName' وحفظ المستند فيه.",
-                        details = "سبب الاختيار: لم يتطابق النص الجديد مع سياق المشروع السابق.\nالملفات: ${results.savedFiles.joinToString { it.fileName }}"
-                    )
-                )
-                
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(applicationContext, "✅ تم الحفظ وإنشاء مجلد جديد: $folderName", Toast.LENGTH_SHORT).show()
-                    hideContextDecisionDialog()
-                }
+            val suggested = com.example.engine.ProjectContextManager.suggestFolderName(text, applicationContext)
+            if (suggested == "MANUAL") {
+                showManualFolderNameInputDialog(text)
+            } else {
+                createNewFolderAndSave(suggested, text)
             }
-            com.example.engine.ProjectContextManager.isBypassed = false
         }
         
         ignoreBtn?.setOnClickListener {
@@ -1032,15 +1074,80 @@ class GoldenBubbleService : Service(), LifecycleOwner {
             contextDialogLayout?.visibility = View.VISIBLE
         }
     }
+
+    private fun showManualFolderNameInputDialog(text: String) {
+        contextDialogLayout?.visibility = View.GONE
+        manualNameInputLayout?.visibility = View.VISIBLE
+        manualFolderNameEditText?.setText("")
+        manualFolderNameEditText?.requestFocus()
+
+        confirmManualFolderBtn?.setOnClickListener {
+            val entered = manualFolderNameEditText?.text?.toString()?.trim() ?: ""
+            if (entered.isBlank()) {
+                Toast.makeText(applicationContext, "يرجى كتابة اسم صحيح للمجلد", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            createNewFolderAndSave(entered, text)
+        }
+
+        cancelManualFolderBtn?.setOnClickListener {
+            manualNameInputLayout?.visibility = View.GONE
+            contextDialogLayout?.visibility = View.VISIBLE
+        }
+    }
+
+    private fun createNewFolderAndSave(folderName: String, text: String) {
+        com.example.engine.ProjectContextManager.isBypassed = true
+        serviceScope.launch {
+            val baseDir = getBaseDir()
+            val sanitizedFolder = folderName.replace(Regex("[\\\\/:*?\"<>|]"), " ").replace(Regex("\\s+"), "_").trim()
+            val finalFolder = if (sanitizedFolder.isEmpty()) "مجلد_جديد" else sanitizedFolder
+            
+            val newFolder = File(baseDir, finalFolder)
+            newFolder.mkdirs()
+            
+            com.example.engine.ProjectContextManager.setCurrentProjectPath(applicationContext, finalFolder)
+            
+            val cmdContext = com.example.engine.CommandContext(
+                context = applicationContext,
+                baseDir = baseDir,
+                args = emptyMap(),
+                flags = emptyList()
+            )
+            val results = com.example.engine.SmartCaptureEngine.processCapturedText(text, cmdContext)
+            
+            // Write Log
+            try {
+                val db = AppDatabase.getDatabase(applicationContext)
+                db.dao().insertLog(
+                    LogEntity(
+                        type = "context_manager",
+                        message = "إنشاء مجلد: تم إنشاء مجلد باسم '$finalFolder' وحفظ المستند فيه.",
+                        details = "تم الحفظ بنجاح.\nالملفات: ${results.savedFiles.joinToString { it.fileName }}"
+                    )
+                )
+            } catch (e: Exception) {
+                // silently ignored
+            }
+            
+            withContext(Dispatchers.Main) {
+                Toast.makeText(applicationContext, "✅ تم الحفظ وإنشاء مجلد: $finalFolder", Toast.LENGTH_SHORT).show()
+                manualNameInputLayout?.visibility = View.GONE
+                hideContextDecisionDialog()
+            }
+        }
+        com.example.engine.ProjectContextManager.isBypassed = false
+    }
     
     private fun hideContextDecisionDialog() {
         contextDialogLayout?.visibility = View.GONE
+        manualNameInputLayout?.visibility = View.GONE
         rootLayout?.let { root ->
             for (i in 0 until root.childCount) {
                 val child = root.getChildAt(i)
-                if (child == contextDialogLayout) {
+                if (child == contextDialogLayout || child == manualNameInputLayout) {
                     child.visibility = View.GONE
-                } else if (child is LinearLayout && child != contextDialogLayout) {
+                } else if (child is LinearLayout && child != contextDialogLayout && child != manualNameInputLayout) {
                     child.visibility = View.VISIBLE
                     break
                 }
