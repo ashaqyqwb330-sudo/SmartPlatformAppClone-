@@ -82,12 +82,20 @@ class GoldenBubbleService : Service(), LifecycleOwner {
     private var saveHereBtn: Button? = null
     private var newFolderBtn: Button? = null
     private var ignoreBtn: Button? = null
+    private var activeProjectTxtView: TextView? = null
 
     // Manual Folder Name Input Views
     private var manualNameInputLayout: LinearLayout? = null
     private var manualFolderNameEditText: android.widget.EditText? = null
     private var confirmManualFolderBtn: Button? = null
     private var cancelManualFolderBtn: Button? = null
+
+    // Template Dialog Views
+    private var templateDialogLayout: LinearLayout? = null
+    private var importFastBtn: Button? = null
+    private var importDetailBtn: Button? = null
+    private var templateCancelBtn: Button? = null
+    private var pendingTemplateText: String? = null
 
     private val isPaused: Boolean
         get() = getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE).getBoolean("clipboard_is_paused", false)
@@ -205,11 +213,19 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         val lastProcessedHash = sharedPrefs.getString("last_processed_text_hash", "")
         if (textHash == lastProcessedHash) return
 
+        val smartPrefs = getSharedPreferences("SmartCapturePrefs", Context.MODE_PRIVATE)
+        val autoImportTemplates = smartPrefs.getBoolean("auto_import_templates", true)
+        val trimmedText = text.trim()
+        if (autoImportTemplates && trimmedText.startsWith("{") && (trimmedText.contains("template_version") || trimmedText.contains("templateVersion"))) {
+            pendingTemplateText = text
+            showTemplateDialogOverlay()
+            return
+        }
+
         val pBuilder = sharedPrefs.getString("prefix_builder", "@builder") ?: "@builder"
         val pExecutor = sharedPrefs.getString("prefix_executor", "@executor") ?: "@executor"
         val pTreedoc = sharedPrefs.getString("prefix_treedoc", "@treedoc") ?: "@treedoc"
 
-        val smartPrefs = getSharedPreferences("SmartCapturePrefs", Context.MODE_PRIVATE)
         val smartEnabled = smartPrefs.getBoolean("smart_capture_enabled", false)
 
         if (text.contains("$pBuilder:") || text.contains("$pExecutor:") || text.contains("$pTreedoc:") || smartEnabled) {
@@ -531,6 +547,63 @@ class GoldenBubbleService : Service(), LifecycleOwner {
             indicatorContainer.addView(statusTxt)
             statusRow.addView(indicatorContainer)
             expandedLayout.addView(statusRow)
+
+            // 1.5 Active Project Indicator & Switcher Row
+            val activeProjectRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dpToPx(2), 0, dpToPx(6))
+            }
+
+            val projectLabelPrefix = TextView(this).apply {
+                text = "المشروع النشط:"
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 10f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            activeProjectRow.addView(projectLabelPrefix)
+
+            val activeProjectTxt = TextView(this).apply {
+                val currentPath = com.example.engine.ProjectContextManager.getCurrentProjectPath(this@GoldenBubbleService)
+                val allProjs = com.example.engine.ProjectManager.getAllProjects(this@GoldenBubbleService)
+                val currentName = allProjs.find { it.first == currentPath || it.first.endsWith(currentPath) }?.second ?: "سياق النشاط"
+                text = "📁 $currentName"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 9.5f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, 0, dpToPx(6), 0)
+            }
+            activeProjectTxtView = activeProjectTxt
+            activeProjectRow.addView(activeProjectTxt)
+
+            val switchProjectBtn = Button(this).apply {
+                text = "🔄 تبديل"
+                setTextColor(Color.BLACK)
+                background = createRoundedDrawable("#FFD700", 4f)
+                textSize = 8.5f
+                setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2))
+                val lp = LinearLayout.LayoutParams(dpToPx(56), dpToPx(24))
+                layoutParams = lp
+            }
+            activeProjectRow.addView(switchProjectBtn)
+
+            switchProjectBtn.setOnClickListener {
+                val allProjs = com.example.engine.ProjectManager.getAllProjects(this@GoldenBubbleService).take(3)
+                if (allProjs.size > 1) {
+                    val currentPath = com.example.engine.ProjectContextManager.getCurrentProjectPath(this@GoldenBubbleService)
+                    var index = allProjs.indexOfFirst { it.first == currentPath || it.first.endsWith(currentPath) }
+                    if (index == -1) index = 0
+                    val nextIndex = (index + 1) % allProjs.size
+                    val nextProj = allProjs[nextIndex]
+                    com.example.engine.ProjectManager.setActiveProject(this@GoldenBubbleService, nextProj.first)
+                    activeProjectTxt.text = "📁 ${nextProj.second}"
+                    Toast.makeText(applicationContext, "🔄 تم تبديل المشروع النشط إلى: ${nextProj.second}", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(applicationContext, "لا توجد مشاريع أخرى للتبديل إليها", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            expandedLayout.addView(activeProjectRow)
 
             // Last Event message bubble
             lastActionTxt = TextView(this).apply {
@@ -952,6 +1025,101 @@ class GoldenBubbleService : Service(), LifecycleOwner {
 
             root.addView(manualFL, cardParams)
 
+            // 5. TEMPLATE DETECTION OVERLAY
+            val templateFL = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = createRoundedDrawable("#1F1F35", 16f, "#FFD700", 2)
+                setPadding(dpToPx(14), dpToPx(14), dpToPx(14), dpToPx(14))
+                visibility = View.GONE
+            }
+
+            val tfTitle = TextView(this).apply {
+                text = "📁 تم كشف قالب مشروع ذكي! هل تريد استيراده؟"
+                setTextColor(Color.parseColor("#FFD700"))
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(0, 0, 0, dpToPx(12))
+            }
+            templateFL.addView(tfTitle)
+
+            val tfBtnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+
+            val btnFast = Button(this).apply {
+                text = "استيراد سريع"
+                setTextColor(Color.BLACK)
+                background = createRoundedDrawable("#10B981", 8f)
+                textSize = 10f
+                val lp = LinearLayout.LayoutParams(0, dpToPx(34), 1.2f).apply {
+                    setMargins(0, 0, dpToPx(4), 0)
+                }
+                layoutParams = lp
+            }
+            tfBtnRow.addView(btnFast)
+            importFastBtn = btnFast
+
+            val btnDetail = Button(this).apply {
+                text = "معاينة وتحرير"
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#3B82F6", 8f)
+                textSize = 10f
+                val lp = LinearLayout.LayoutParams(0, dpToPx(34), 1.2f).apply {
+                    setMargins(0, 0, dpToPx(4), 0)
+                }
+                layoutParams = lp
+            }
+            tfBtnRow.addView(btnDetail)
+            importDetailBtn = btnDetail
+
+            val btnCancelTmpl = Button(this).apply {
+                text = "تجاهل"
+                setTextColor(Color.WHITE)
+                background = createRoundedDrawable("#EF4444", 8f)
+                textSize = 10f
+                val lp = LinearLayout.LayoutParams(0, dpToPx(34), 1f)
+                layoutParams = lp
+            }
+            tfBtnRow.addView(btnCancelTmpl)
+            templateCancelBtn = btnCancelTmpl
+
+            templateFL.addView(tfBtnRow)
+            templateDialogLayout = templateFL
+
+            root.addView(templateFL, cardParams)
+
+            // Setup template click actions
+            btnFast.setOnClickListener {
+                val tText = pendingTemplateText
+                if (!tText.isNullOrBlank()) {
+                    performFastImport(tText)
+                } else {
+                    Toast.makeText(applicationContext, "عذراً، محتوى القالب غير متوفر", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            btnDetail.setOnClickListener {
+                val tText = pendingTemplateText
+                if (!tText.isNullOrBlank()) {
+                    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                        putExtra("import_template_json", tText)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    if (launchIntent != null) {
+                        startActivity(launchIntent)
+                    }
+                    hideTemplateDialogOverlay()
+                } else {
+                    Toast.makeText(applicationContext, "عذراً، محتوى القالب غير متوفر", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            btnCancelTmpl.setOnClickListener {
+                hideTemplateDialogOverlay()
+            }
+
             // Touch Dragging Logic
             var initialX = 0
             var initialY = 0
@@ -1139,15 +1307,52 @@ class GoldenBubbleService : Service(), LifecycleOwner {
         com.example.engine.ProjectContextManager.isBypassed = false
     }
     
+    private fun showTemplateDialogOverlay() {
+        contextDialogLayout?.visibility = View.GONE
+        manualNameInputLayout?.visibility = View.GONE
+        templateDialogLayout?.visibility = View.VISIBLE
+    }
+
+    private fun hideTemplateDialogOverlay() {
+        templateDialogLayout?.visibility = View.GONE
+        hideContextDecisionDialog()
+    }
+
+    private fun performFastImport(templateJson: String) {
+        val parsedResult = com.example.engine.TemplateParser.parse(templateJson)
+        if (parsedResult.isSuccess) {
+            val template = parsedResult.getOrThrow()
+            val basePath = com.example.engine.ProjectContextManager.getBaseDir(applicationContext).absolutePath
+            val buildResult = com.example.engine.ProjectBuilder.build(template, basePath)
+            if (buildResult.isSuccess) {
+                val projectPath = buildResult.getOrThrow()
+                com.example.engine.ProjectManager.addProject(applicationContext, projectPath, template.projectName)
+                com.example.engine.ProjectManager.setActiveProject(applicationContext, projectPath)
+                activeProjectTxtView?.text = "📁 ${template.projectName}"
+                Toast.makeText(applicationContext, "✅ تم استيراد وتفعيل قالب: ${template.projectName}", Toast.LENGTH_LONG).show()
+                hideTemplateDialogOverlay()
+                
+                val refreshIntent = Intent("com.example.ACTION_REFRESH_PROJECTS")
+                refreshIntent.setPackage(packageName)
+                sendBroadcast(refreshIntent)
+            } else {
+                Toast.makeText(applicationContext, "❌ فشل بناء مجلدات المشروع: ${buildResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+            }
+        } else {
+            Toast.makeText(applicationContext, "❌ فشل تحليل القالب: ${parsedResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun hideContextDecisionDialog() {
         contextDialogLayout?.visibility = View.GONE
         manualNameInputLayout?.visibility = View.GONE
+        templateDialogLayout?.visibility = View.GONE
         rootLayout?.let { root ->
             for (i in 0 until root.childCount) {
                 val child = root.getChildAt(i)
-                if (child == contextDialogLayout || child == manualNameInputLayout) {
+                if (child == contextDialogLayout || child == manualNameInputLayout || child == templateDialogLayout) {
                     child.visibility = View.GONE
-                } else if (child is LinearLayout && child != contextDialogLayout && child != manualNameInputLayout) {
+                } else if (child is LinearLayout && child != contextDialogLayout && child != manualNameInputLayout && child != templateDialogLayout) {
                     child.visibility = View.VISIBLE
                     break
                 }

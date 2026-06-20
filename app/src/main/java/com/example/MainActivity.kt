@@ -135,6 +135,7 @@ enum class MainTab(val ltrTitle: String, val rtlTitle: String) {
     TREEDOC("TreeDoc", "الشجرية"),
     EXECUTOR("Executor", "المنفذ"),
     GEMINI("Gemini AI", "جمناي الذكي"),
+    PROJECTS("Projects", "المشاريع"),
     SETTINGS("Settings", "الإعدادات")
 }
 
@@ -224,6 +225,7 @@ fun MainAppContent(
                     MainTab.TREEDOC -> TreeDocScreen(viewModel)
                     MainTab.EXECUTOR -> ExecutorScreen(viewModel)
                     MainTab.GEMINI -> GeminiScreen(viewModel)
+                    MainTab.PROJECTS -> ProjectsScreen(viewModel)
                     MainTab.SETTINGS -> SettingsScreen(
                         viewModel = viewModel,
                         goldenFrameEnabled = simulatedGoldenFrame,
@@ -586,6 +588,7 @@ fun getTabIcon(tab: MainTab): ImageVector {
         MainTab.TREEDOC -> Icons.Default.List
         MainTab.EXECUTOR -> Icons.Default.PlayArrow
         MainTab.GEMINI -> Icons.Default.Star
+        MainTab.PROJECTS -> Icons.Default.Menu
         MainTab.SETTINGS -> Icons.Default.Settings
     }
 }
@@ -3018,6 +3021,9 @@ fun SettingsScreen(
             val smartCaptureEnabled = remember { 
                 androidx.compose.runtime.mutableStateOf(prefs.getBoolean("smart_capture_enabled", false)) 
             }
+            val autoImportTemplates = remember {
+                androidx.compose.runtime.mutableStateOf(prefs.getBoolean("auto_import_templates", true))
+            }
             val saveAllTexts = remember { 
                 androidx.compose.runtime.mutableStateOf(prefs.getBoolean("save_all_texts", false)) 
             }
@@ -3175,6 +3181,34 @@ fun SettingsScreen(
                                         uncheckedTrackColor = GlassWhite
                                     ),
                                     modifier = Modifier.testTag("apply_all_themes_switch")
+                                )
+                            }
+
+                            Divider(color = GlassBorder.copy(alpha = 0.2f), thickness = 0.5.dp)
+
+                            // 3.5. Auto Import Templates from clipboard
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("الالتقاط التلقائي للقوالب", color = TextSilver, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("تحليل واستيراد وتفعيل قوالب التصنيفات الذكية والمشاريع فور نسخها إلى الحافظة", color = TextGray, fontSize = 9.sp)
+                                }
+                                Switch(
+                                    checked = autoImportTemplates.value,
+                                    onCheckedChange = { isChecked ->
+                                        autoImportTemplates.value = isChecked
+                                        prefs.edit().putBoolean("auto_import_templates", isChecked).apply()
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = SlateBg,
+                                        checkedTrackColor = MetallicGold,
+                                        uncheckedThumbColor = TextGray,
+                                        uncheckedTrackColor = GlassWhite
+                                    ),
+                                    modifier = Modifier.testTag("auto_import_templates_switch")
                                 )
                             }
 

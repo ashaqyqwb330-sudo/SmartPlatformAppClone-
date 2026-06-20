@@ -63,7 +63,42 @@ object ProjectContextManager {
         return if (file.isAbsolute) file else File(baseDir, projectPath)
     }
 
+    fun reloadActiveTemplateKeywords(context: Context, projectPath: String) {
+        val projectDir = getProjectDir(projectPath, context)
+        val configFile = File(projectDir, "project_config.json")
+        if (configFile.exists()) {
+            try {
+                val configContent = configFile.readText()
+                val configObj = org.json.JSONObject(configContent)
+                val foldersArray = configObj.optJSONArray("folders")
+                val mergedKeywords = mutableListOf<String>()
+                if (foldersArray != null) {
+                    for (i in 0 until foldersArray.length()) {
+                        val folderObj = foldersArray.getJSONObject(i)
+                        val kwArray = folderObj.optJSONArray("keywords")
+                        if (kwArray != null) {
+                            for (j in 0 until kwArray.length()) {
+                                val kw = kwArray.getString(j).lowercase().trim()
+                                if (kw.length >= 3 && !blacklistedKeywords.contains(kw)) {
+                                    mergedKeywords.add(kw)
+                                }
+                            }
+                        }
+                    }
+                }
+                val finalMerged = mergedKeywords.distinct()
+                val file = File(projectDir, "keywords.json")
+                val jsonArray = JSONArray()
+                finalMerged.forEach { jsonArray.put(it) }
+                file.writeText(jsonArray.toString(4))
+            } catch (e: Exception) {
+                // silent
+            }
+        }
+    }
+
     fun loadProjectKeywords(projectPath: String, context: Context): List<String> {
+        reloadActiveTemplateKeywords(context, projectPath)
         val file = File(getProjectDir(projectPath, context), "keywords.json")
         if (!file.exists()) return emptyList()
         return try {
