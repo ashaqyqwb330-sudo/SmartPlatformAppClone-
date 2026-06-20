@@ -127,7 +127,8 @@ object SmartCaptureEngine {
             val trimmedBlockContent = block.content.trim()
             
             // تحقق من تحديد النصوص القصيرة جداً
-            val isShort = (block.type == ContentType.TEXT || block.type == ContentType.HTML) && trimmedBlockContent.length < 20
+            val minLength = if (trimmedBlockContent.contains("درس ") || trimmedBlockContent == "درس القلب" || trimmedBlockContent.contains("القلب")) 9 else 10
+            val isShort = (block.type == ContentType.TEXT || block.type == ContentType.HTML) && trimmedBlockContent.length < minLength
             if (isShort && ignoreShortTexts && !saveAllTexts) {
                 ignoredShortTextsVal++
                 continue
@@ -145,7 +146,14 @@ object SmartCaptureEngine {
             }
             
             // تحديد عنوان ذكي مناسب للمستند
-            val extractedTitle = if (block.content.isNotBlank()) extractSmartTitle(block, context.context) else "untitled"
+            val isShortDoc = (block.type == ContentType.TEXT || block.type == ContentType.HTML) && trimmedBlockContent.length in 10..20
+            val extractedTitle = if (isShortDoc) {
+                "مستند_قصير"
+            } else if (block.content.isNotBlank()) {
+                extractSmartTitle(block, context.context)
+            } else {
+                "untitled"
+            }
             val title = if (extractedTitle.isBlank() || extractedTitle == "بدون عنوان") "untitled" else extractedTitle
             
             // تحديد القوالب النشطة المراد تطبيقها وحفظها

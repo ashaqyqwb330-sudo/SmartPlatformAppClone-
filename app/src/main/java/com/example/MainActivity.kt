@@ -148,6 +148,7 @@ fun MainAppContent(
 ) {
     val context = LocalContext.current
     var currentTab by remember { mutableStateOf(MainTab.MONITOR) }
+    var showAIPromptHub by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val sharedPrefs = remember(context) { context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE) }
@@ -211,7 +212,11 @@ fun MainAppContent(
             }
 
             // Interactive Dynamic App Header
-            AppHeader(isServiceRunning = viewModel.isServiceRunning.collectAsState().value)
+            AppHeader(
+                isServiceRunning = viewModel.isServiceRunning.collectAsState().value,
+                viewModel = viewModel,
+                onTabSelected = { currentTab = it }
+            )
 
             // Dynamic Main Screen Switcher
             Box(
@@ -220,17 +225,22 @@ fun MainAppContent(
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
             ) {
-                when (currentTab) {
-                    MainTab.MONITOR -> MonitorScreen(viewModel)
-                    MainTab.TREEDOC -> TreeDocScreen(viewModel)
-                    MainTab.EXECUTOR -> ExecutorScreen(viewModel)
-                    MainTab.GEMINI -> GeminiScreen(viewModel)
-                    MainTab.PROJECTS -> ProjectsScreen(viewModel)
-                    MainTab.SETTINGS -> SettingsScreen(
-                        viewModel = viewModel,
-                        goldenFrameEnabled = simulatedGoldenFrame,
-                        onToggleGoldenFrame = onToggleSimulatedFrame
-                    )
+                if (showAIPromptHub) {
+                    AIPromptHubScreen(onNavigateBack = { showAIPromptHub = false })
+                } else {
+                    when (currentTab) {
+                        MainTab.MONITOR -> MonitorScreen(viewModel)
+                        MainTab.TREEDOC -> TreeDocScreen(viewModel)
+                        MainTab.EXECUTOR -> ExecutorScreen(viewModel)
+                        MainTab.GEMINI -> GeminiScreen(viewModel)
+                        MainTab.PROJECTS -> ProjectsScreen(viewModel)
+                        MainTab.SETTINGS -> SettingsScreen(
+                            viewModel = viewModel,
+                            goldenFrameEnabled = simulatedGoldenFrame,
+                            onToggleGoldenFrame = onToggleSimulatedFrame,
+                            onNavigateToAIPromptHub = { showAIPromptHub = true }
+                        )
+                    }
                 }
             }
 
@@ -258,26 +268,210 @@ fun MainAppContent(
                         CircleShape
                     )
                     .clickable {
-                        isReportingBubble = true
-                        viewModel.generateTreeReport(".", "txt", true) { msg ->
-                            isReportingBubble = false
-                            Toast
-                                .makeText(context, "الفقاعة الذكية: تم نسخ تقرير الشجرة للحافظة!", Toast.LENGTH_SHORT)
-                                .show()
-                        }
+                        showBubbleDialog = true
                     }
                     .testTag("floating_bubble"),
                 contentAlignment = Alignment.Center
             ) {
-                if (isReportingBubble) {
-                    CircularProgressIndicator(color = SlateBg, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Quick Report Bubble",
-                        tint = SlateBg,
-                        modifier = Modifier.size(25.dp)
-                    )
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = "Quick Report Bubble",
+                    tint = SlateBg,
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+        }
+
+        if (showBubbleDialog) {
+            Dialog(
+                onDismissRequest = { showBubbleDialog = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth(0.92f)
+                        .padding(16.dp)
+                        .border(1.dp, MetallicGold, RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp),
+                    color = SlateBg
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("⚡", fontSize = 18.sp)
+                                Text(
+                                    "الفقاعة الذهبية - تحكم سريع",
+                                    color = BrightGold,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                            IconButton(onClick = { showBubbleDialog = false }, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "اغلاق", tint = TextSilver)
+                            }
+                        }
+
+                        Divider(color = GlassBorder)
+
+                        var quickCommandText by remember { mutableStateOf("") }
+                        var isBubbleExecuting by remember { mutableStateOf(false) }
+                        var bubbleStatusMsg by remember { mutableStateOf("") }
+
+                        Text(
+                            "أدخل أوامر التوليد السريعة أو كتل `@builder` أو موجهات الذكاء لتعديل الملفات والتحسين التلقائي:",
+                            color = TextSilver,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+
+                        OutlinedTextField(
+                            value = quickCommandText,
+                            onValueChange = { quickCommandText = it },
+                            placeholder = { Text("أدخل أمرًا سريعًا أو تلقين للـ AI... ⚡", color = TextMuted, fontSize = 11.sp) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(100.dp)
+                                .testTag("quick_command_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MetallicGold,
+                                unfocusedBorderColor = GlassBorder,
+                                cursorColor = MetallicGold
+                            ),
+                            textStyle = TextStyle(color = TextSilver, fontSize = 11.sp)
+                        )
+
+                        if (bubbleStatusMsg.isNotBlank()) {
+                            Text(
+                                bubbleStatusMsg,
+                                color = BrightGold,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        if (isBubbleExecuting) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(color = MetallicGold, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("جاري التنفيذ والمزامنة على القرص...", color = TextSilver, fontSize = 11.sp)
+                            }
+                        }
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Gemini Execute
+                            Button(
+                                onClick = {
+                                    if (quickCommandText.trim().isEmpty()) {
+                                        Toast.makeText(context, "الرجاء كتابة تلقين أو أمر سريع أولاً!", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
+                                    isBubbleExecuting = true
+                                    bubbleStatusMsg = "جاري استشارة المساعد الذكي وتوليد الاستجابة..."
+                                    scope.launch {
+                                        try {
+                                            val geminiRes = com.example.service.GeminiService(context).generateContent(quickCommandText)
+                                            if (geminiRes.isSuccess) {
+                                                val content = geminiRes.getOrThrow()
+                                                bubbleStatusMsg = "تم توليد الاستجابة بنجاح. جاري شحنها وتطبيقها على المشروع الحسابي..."
+                                                viewModel.runManualProcess(content) { outMsg ->
+                                                    isBubbleExecuting = false
+                                                    bubbleStatusMsg = ""
+                                                    quickCommandText = ""
+                                                    Toast.makeText(context, "🎉 تم بنجاح معالجة وتطبيق المخرج الذكي بالتزامن!", Toast.LENGTH_LONG).show()
+                                                    showBubbleDialog = false
+                                                }
+                                            } else {
+                                                isBubbleExecuting = false
+                                                bubbleStatusMsg = ""
+                                                Toast.makeText(context, "❌ فشل عمل محرك Gemini: ${geminiRes.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            isBubbleExecuting = false
+                                            bubbleStatusMsg = ""
+                                            Toast.makeText(context, "❌ خطأ أثناء الاتصال: ${e.message}", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(38.dp).testTag("gemini_quick_exec_btn"),
+                                enabled = !isBubbleExecuting
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Settings, contentDescription = null, tint = SlateBg, modifier = Modifier.size(14.dp))
+                                    Text("معالجة بذكاء بـ Gemini 🧠", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Local Execution
+                                Button(
+                                    onClick = {
+                                        if (quickCommandText.trim().isEmpty()) {
+                                            Toast.makeText(context, "الرجاء كتابة كتل @builder هنا!", Toast.LENGTH_SHORT).show()
+                                            return@Button
+                                        }
+                                        isBubbleExecuting = true
+                                        bubbleStatusMsg = "جاري الحفظ والتطبيق محلياً..."
+                                        viewModel.runManualProcess(quickCommandText) { outMsg ->
+                                            isBubbleExecuting = false
+                                            bubbleStatusMsg = ""
+                                            quickCommandText = ""
+                                            Toast.makeText(context, "⚡ تم التنفيذ الفوري للملف بنجاح!", Toast.LENGTH_LONG).show()
+                                            showBubbleDialog = false
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CardSlateBg, contentColor = MetallicGold),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f).height(38.dp).border(1.dp, GlassBorder, RoundedCornerShape(8.dp)),
+                                    enabled = !isBubbleExecuting
+                                ) {
+                                    Text("أمر محلي مباشر ⚡", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                // Tree report
+                                Button(
+                                    onClick = {
+                                        isBubbleExecuting = true
+                                        bubbleStatusMsg = "جاري استخراج شجرة المشروع للحافظة..."
+                                        viewModel.generateTreeReport(".", "txt", true) { msg ->
+                                            isBubbleExecuting = false
+                                            bubbleStatusMsg = ""
+                                            Toast.makeText(context, "📋 تم نسخ تلخيص الشجرة بالكامل للحافظة!", Toast.LENGTH_LONG).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CardSlateBg, contentColor = TextSilver),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f).height(38.dp).border(1.dp, GlassBorder, RoundedCornerShape(8.dp)),
+                                    enabled = !isBubbleExecuting
+                                ) {
+                                    Text("تقرير الشجرة 📊", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -495,7 +689,13 @@ fun SimulatedStatusBar(isServiceActive: Boolean) {
 }
 
 @Composable
-fun AppHeader(isServiceRunning: Boolean) {
+fun AppHeader(
+    isServiceRunning: Boolean,
+    viewModel: MainViewModel,
+    onTabSelected: (MainTab) -> Unit
+) {
+    var showDashboard by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -519,19 +719,52 @@ fun AppHeader(isServiceRunning: Boolean) {
             )
         }
 
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .background(GlassWhite, CircleShape)
-                .border(1.dp, GlassBorder, CircleShape),
-            contentAlignment = Alignment.Center
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // Stats dashboard button
+            IconButton(
+                onClick = { showDashboard = true },
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(GlassWhite, CircleShape)
+                    .border(1.dp, GlassBorder, CircleShape)
+                    .testTag("open_status_dashboard_btn")
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.Bottom,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                ) {
+                    Box(modifier = Modifier.width(3.dp).height(10.dp).background(MetallicGold, RoundedCornerShape(1.dp)))
+                    Box(modifier = Modifier.width(3.dp).height(16.dp).background(BrightGold, RoundedCornerShape(1.dp)))
+                    Box(modifier = Modifier.width(3.dp).height(12.dp).background(MetallicGold, RoundedCornerShape(1.dp)))
+                }
+            }
+
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .background(if (isServiceRunning) EmeraldGlow else DangerRed, CircleShape)
-            )
+                    .size(38.dp)
+                    .background(GlassWhite, CircleShape)
+                    .border(1.dp, GlassBorder, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(if (isServiceRunning) EmeraldGlow else DangerRed, CircleShape)
+                )
+            }
         }
+    }
+
+    if (showDashboard) {
+        StatusDashboardDialog(
+            viewModel = viewModel,
+            onDismiss = { showDashboard = false },
+            onNavigateToTab = onTabSelected
+        )
     }
 }
 
@@ -2436,7 +2669,8 @@ fun GeminiScreen(viewModel: MainViewModel) {
 fun SettingsScreen(
     viewModel: MainViewModel,
     goldenFrameEnabled: Boolean,
-    onToggleGoldenFrame: (Boolean) -> Unit
+    onToggleGoldenFrame: (Boolean) -> Unit,
+    onNavigateToAIPromptHub: () -> Unit
 ) {
     var bPrefix by remember { mutableStateOf(viewModel.prefixBuilder.value) }
     var ePrefix by remember { mutableStateOf(viewModel.prefixExecutor.value) }
@@ -2502,6 +2736,32 @@ fun SettingsScreen(
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Text("إدارة الصلاحيات", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // AI Prompt Hub card
+        item {
+            GlassCard(modifier = Modifier.fillMaxWidth().testTag("ai_prompt_hub_card")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("تعليمات المساعدين الذكية (AI Prompt Hub)", color = MetallicGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("تثبيت وتعديل التلقينات الأساسية (System Instructions) وتغيير سلوك الذكاء للمساعد تلقائياً", color = TextGray, fontSize = 10.sp)
+                    }
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
+                    Button(
+                        onClick = onNavigateToAIPromptHub,
+                        colors = ButtonDefaults.buttonColors(containerColor = MetallicGold, contentColor = SlateBg),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("فتح المركز", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -3355,29 +3615,18 @@ fun SettingsScreen(
                             
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            OutlinedTextField(
+                            com.example.ui.components.CodeEditor(
                                 value = customCss.value,
                                 onValueChange = { cssVal ->
                                     customCss.value = cssVal
                                     prefs.edit().putString("custom_css", cssVal).apply()
                                 },
-                                placeholder = { Text("/* اكتب أنماط CSS خاصة بك هنا */\nbody { font-family: sans-serif; }", color = TextGray.copy(alpha = 0.5f), fontSize = 11.sp) },
+                                language = "css",
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(100.dp)
+                                    .height(140.dp)
                                     .testTag("custom_css_input"),
-                                textStyle = TextStyle(color = TextSilver, fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                                singleLine = false,
-                                maxLines = 10,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = TextSilver,
-                                    unfocusedTextColor = TextSilver,
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedBorderColor = MetallicGold,
-                                    unfocusedBorderColor = GlassBorder,
-                                    cursorColor = MetallicGold
-                                )
+                                placeholder = "/* اكتب أنماط CSS خاصة بك هنا */\nbody { font-family: sans-serif; }"
                             )
 
                             Spacer(modifier = Modifier.height(12.dp))

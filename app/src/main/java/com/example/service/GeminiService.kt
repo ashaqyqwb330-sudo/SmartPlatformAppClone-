@@ -56,7 +56,11 @@ class GeminiService(private val context: Context) {
             return@withContext Result.failure(Exception("API Key is missing. Please configure it in Settings or the Secrets panel."))
         }
 
-        val systemPrompt = "You are the AI assistant inside Smart Platform Engine (المنصة الذكية). " +
+        val customSystemInstruction = context.getSharedPreferences("SmartPrefs", Context.MODE_PRIVATE)
+            .getString("ai_system_instruction", "") ?: ""
+
+        val systemPrompt = (if (customSystemInstruction.isNotBlank()) customSystemInstruction + "\n\n" else "") +
+                "You are the AI assistant inside Smart Platform Engine (المنصة الذكية). " +
                 "You can generate structural text containing builder commands to write files or execute commands. " +
                 "Always format your instructions clearly. " +
                 "Example response structure:\n" +

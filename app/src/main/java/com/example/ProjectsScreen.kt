@@ -593,23 +593,18 @@ fun ImportTemplateScreen(
                         fontSize = 11.sp
                     )
 
-                    OutlinedTextField(
+                    com.example.ui.components.CodeEditor(
                         value = jsonText,
                         onValueChange = {
                             jsonText = it
                             parseError = null
                         },
-                        placeholder = { Text("{ \"projectName\": \"...\", \"folders\": [...] }", color = TextMuted) },
+                        language = "json",
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
                             .testTag("json_template_editor_area"),
-                        textStyle = TextStyle(color = TextSilver, fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MetallicGold,
-                            unfocusedBorderColor = GlassBorder,
-                            cursorColor = MetallicGold
-                        )
+                        placeholder = "{ \"projectName\": \"...\", \"folders\": [...] }"
                     )
 
                     parseError?.let { err ->
