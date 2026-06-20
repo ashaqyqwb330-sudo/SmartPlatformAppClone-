@@ -2810,6 +2810,151 @@ fun SettingsScreen(
             }
         }
 
+        // Document Theme Selector Card
+        item {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val prefs = remember { context.getSharedPreferences("SmartCapturePrefs", android.content.Context.MODE_PRIVATE) }
+            val currentTheme = remember { 
+                androidx.compose.runtime.mutableStateOf(prefs.getString("document_theme", "dark") ?: "dark") 
+            }
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(MetallicGold.copy(alpha = 0.15f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = null,
+                                tint = MetallicGold,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        Text("سمة مستندات الالتقاط الذكي الفاخرة", color = TextSilver, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Text("اختر المظهر الجمالي الفاخر لتنسيق صفحات الويب المولدة تلقائياً للمستندات النصية في SmartInbox", color = TextGray, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                    
+                    Spacer(modifier = Modifier.height(14.dp))
+                    
+                    val themesRow1 = listOf(
+                        Triple("dark", "داكن ذهبي", androidx.compose.ui.graphics.Color(0xFFfbbf24)),
+                        Triple("light", "فاتح نيون", androidx.compose.ui.graphics.Color(0xFF6366f1)),
+                        Triple("academic", "أكاديمي عتيق", androidx.compose.ui.graphics.Color(0xFF7c2d12))
+                    )
+                    
+                    val themesRow2 = listOf(
+                        Triple("oasis", "واحة هادئة", androidx.compose.ui.graphics.Color(0xFF22c55e)),
+                        Triple("space", "سديم فضائي", androidx.compose.ui.graphics.Color(0xFFec4899))
+                    )
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            themesRow1.forEach { (themeId, label, dotColor) ->
+                                val isSelected = currentTheme.value == themeId
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .background(
+                                            if (isSelected) GoldGlassBg else GlassWhite, 
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .border(
+                                            1.dp, 
+                                            if (isSelected) MetallicGold else GlassBorder, 
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { 
+                                            currentTheme.value = themeId
+                                            prefs.edit().putString("document_theme", themeId).apply()
+                                        }
+                                        .padding(vertical = 10.dp)
+                                        .testTag("document_theme_${themeId}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(dotColor, CircleShape)
+                                        )
+                                        Text(
+                                            label, 
+                                            color = if (isSelected) MetallicGold else TextSilver, 
+                                            fontSize = 11.sp, 
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            themesRow2.forEach { (themeId, label, dotColor) ->
+                                val isSelected = currentTheme.value == themeId
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .background(
+                                            if (isSelected) GoldGlassBg else GlassWhite, 
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .border(
+                                            1.dp, 
+                                            if (isSelected) MetallicGold else GlassBorder, 
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { 
+                                            currentTheme.value = themeId
+                                            prefs.edit().putString("document_theme", themeId).apply()
+                                        }
+                                        .padding(vertical = 10.dp)
+                                        .testTag("document_theme_${themeId}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(dotColor, CircleShape)
+                                        )
+                                        Text(
+                                            label, 
+                                            color = if (isSelected) MetallicGold else TextSilver, 
+                                            fontSize = 11.sp, 
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                            // Add a placeholder weight for perfect symmetry
+                            Box(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+
         // Clear Clipboard Option Tag Toggle
         item {
             val clearClipEnabled = viewModel.clearClipAfterSave.collectAsState().value
